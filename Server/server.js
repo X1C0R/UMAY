@@ -230,7 +230,7 @@ app.put(
             contentType: req.file.mimetype,
           });
 
-        fs.unlinkSync(filepath); // remove local file
+        fs.unlinkSync(filepath);
 
         if (error) throw error;
 
