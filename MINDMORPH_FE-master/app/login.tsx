@@ -18,7 +18,7 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState<boolean>(false);
   const [message, setMessage] = useState<string>("");
 
-  const SERVER_URL = "http://192.168.100.5:4000"; // your backend URL
+  const SERVER_URL = "http://192.168.100.5:4000"; 
 
   const handleLogin = async () => {
     if (!email || !password) {
