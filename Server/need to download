@@ -1,0 +1,13 @@
+front end:
+expo install react-native
+expo install react
+expo install @react-native-async-storage/async-storage
+npm install expo-router
+expo install @expo/vector-icons
+expo install expo-linear-gradient
+
+back end:
+npm init -y
+npm install express cors dotenv @supabase/supabase-js bcryptjs jsonwebtoken multer path fs
+npm install express cors dotenv @supabase/supabase-js bcryptjs jsonwebtoken multer
+npm install -g nodemon
