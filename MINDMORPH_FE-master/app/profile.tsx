@@ -119,7 +119,7 @@ export default function ProfileScreen() {
           {/* Back button */}
           <TouchableOpacity
             style={styles.backButton}
-            onPress={() => router.back()}
+            onPress={() => router.push("/journey")}
           >
             <Ionicons name="chevron-back" size={22} color="#0F172A" />
           </TouchableOpacity>

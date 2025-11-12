@@ -82,7 +82,7 @@ export default function EditProfileScreen() {
       }
 
       Alert.alert("Success", "Profile updated successfully!");
-      router.replace("/profile");
+      router.push("/profile");
     } catch (error: any) {
       console.error("Upload error:", error);
       Alert.alert("Error", error.message || "Something went wrong");
