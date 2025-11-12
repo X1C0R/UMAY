@@ -265,6 +265,53 @@ app.put(
 );
 
 
+app.post("/activity", authenticateToken, async(req,res) => {
+  try {
+    const userId = userId;
+    const {
+      subject,
+      reading_time,
+      playback_time,
+      quiz_score,
+      focus_level,
+      activity_type,
+      device_used,
+      session_date,
+    } = res.data;
+
+    if(!subject && !activity_type){
+      return res.status(400).json({ error: "Subject and activity_type are required.",});
+    }
+
+    const { data, error} = await supabase.from("activity_logs").insert([{
+       user_id: userId,
+        subject,
+        reading_time: reading_time || 0,
+        playback_time: playback_time || 0,
+        quiz_score: quiz_score || null,
+        focus_level: focus_level || null,
+        activity_type: activity_type || "unspecified",
+        device_used: device_used || "unknown",
+        session_date: session_date || new Date(),
+    }]).select().single();
+
+    if(error){
+      console.error("Error inserting activity:", error.message);
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.status(201).json({
+      message: "Study activity recorded successfully.",
+      activity: data,
+    });
+
+  } catch (err) {
+    console.error("Server error:", err);
+    res.status(500).json({ error: "Internal server error." });
+  }
+})
+
+
 
 // START SERVER
 const PORT = process.env.PORT || 4000;
