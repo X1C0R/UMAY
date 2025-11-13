@@ -7,6 +7,10 @@ import jwt from "jsonwebtoken";
 import multer from "multer";
 import path from "path"; 
 import fs from "fs";
+import mlRoutes from "./ml-routes.js";
+import * as mlServices from "./ml-services.js";
+import aiRoutes from "./ai-routes.js";
+import * as aiServices from "./ai-content-service.js";
 dotenv.config();
 
 const app = express();
@@ -14,10 +18,70 @@ app.use(cors());
 app.use(express.json());
 const upload = multer({dest: "uploads/"});
 
+// Serve static files from uploads directory (for audio files, images, etc.)
+app.use('/uploads', express.static('uploads'));
+
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_KEY
 );
+
+// Initialize ML Services
+mlServices.initializeMLServices(supabase);
+
+// Initialize AI Services
+// Supports: 'openai', 'anthropic', 'google', 'ollama'
+// Default to 'google' (Gemini) - FREE TIER AVAILABLE
+// Ollama runs locally - NO API KEY NEEDED!
+const aiProvider = process.env.AI_PROVIDER || 'google';
+const aiApiKey = process.env.GOOGLE_AI_API_KEY || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY;
+
+// Debug: Log what we found
+console.log('🔍 AI Configuration Check:');
+console.log(`   Provider: ${aiProvider}`);
+console.log(`   API Key found: ${aiApiKey ? 'Yes (' + aiApiKey.substring(0, 10) + '...)' : 'No'}`);
+console.log(`   GOOGLE_AI_API_KEY: ${process.env.GOOGLE_AI_API_KEY ? 'Set' : 'Not set'}`);
+
+// Ollama doesn't need an API key (runs locally)
+if (aiProvider === 'ollama') {
+  aiServices.initializeAIServices(supabase, null, aiProvider);
+  const ollamaUrl = process.env.OLLAMA_URL || 'http://localhost:11434';
+  const ollamaModel = process.env.OLLAMA_MODEL || 'phi3'; // phi3 is smaller, needs less RAM
+  console.log(`✅ AI Services initialized with provider: ${aiProvider} (Local)`);
+  console.log(`   Ollama URL: ${ollamaUrl}`);
+  console.log(`   Model: ${ollamaModel}`);
+  console.log('   No API key needed - runs locally!');
+} else {
+  // Debug: Check which API key is being used
+  if (process.env.GOOGLE_AI_API_KEY) {
+    console.log('📝 Found GOOGLE_AI_API_KEY in .env');
+  } else if (process.env.OPENAI_API_KEY) {
+    console.log('📝 Found OPENAI_API_KEY in .env');
+  } else if (process.env.ANTHROPIC_API_KEY) {
+    console.log('📝 Found ANTHROPIC_API_KEY in .env');
+  } else {
+    console.warn('⚠️  No AI API keys found in .env file');
+  }
+
+  if (aiApiKey) {
+    // Show first few characters of key for verification (security: don't show full key)
+    const keyPreview = aiApiKey.substring(0, 10) + '...';
+    aiServices.initializeAIServices(supabase, aiApiKey, aiProvider);
+    console.log(`✅ AI Services initialized with provider: ${aiProvider}`);
+    console.log(`   API Key: ${keyPreview}`);
+    if (aiProvider === 'google') {
+      console.log('   Using Google Gemini 2.5/2.0 (Free tier available)');
+      console.log('   Models: gemini-2.0-flash-exp (latest), gemini-1.5-flash (stable)');
+    }
+  } else {
+    console.warn('⚠️  AI API key not found. AI content generation will not work.');
+    console.warn('   Set GOOGLE_AI_API_KEY (FREE), OPENAI_API_KEY, or ANTHROPIC_API_KEY in .env');
+    console.warn('   OR use Ollama (local, free): Set AI_PROVIDER=ollama in .env');
+    console.warn('   Get free Google API key: https://makersuite.google.com/app/apikey');
+    console.warn('   Get Ollama: https://ollama.ai');
+    console.warn('   Make sure .env file is in the Server folder and server is restarted after adding key');
+  }
+}
 
 // MIDDLEWARE
 function authenticateToken(req, res, next) {
@@ -176,7 +240,7 @@ app.post("/login", async (req, res) => {
       message: "Login successful",
     });
   } catch (error) {
-    console.error(err);
+    console.error(error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -267,7 +331,7 @@ app.put(
 
 app.post("/activity", authenticateToken, async(req,res) => {
   try {
-    const userId = userId;
+    const userId = req.userId;
     const {
       subject,
       reading_time,
@@ -277,7 +341,7 @@ app.post("/activity", authenticateToken, async(req,res) => {
       activity_type,
       device_used,
       session_date,
-    } = res.data;
+    } = req.body;
 
     if(!subject && !activity_type){
       return res.status(400).json({ error: "Subject and activity_type are required.",});
@@ -311,7 +375,9 @@ app.post("/activity", authenticateToken, async(req,res) => {
   }
 })
 
-
+// ML/AI Routes - All routes require authentication
+app.use("/api/ml", authenticateToken, mlRoutes);
+app.use("/api/ai", authenticateToken, aiRoutes);
 
 // START SERVER
 const PORT = process.env.PORT || 4000;
