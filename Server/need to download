@@ -11,3 +11,6 @@ npm init -y
 npm install express cors dotenv @supabase/supabase-js bcryptjs jsonwebtoken multer path fs
 npm install express cors dotenv @supabase/supabase-js bcryptjs jsonwebtoken multer
 npm install -g nodemon
+
+
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjA2ZGYxNDc4LWZkZDYtNGNkYS05MWVmLWFkZTk4MmZkZDMwNyIsImVtYWlsIjoibWFya2xlbWluNjA2QGdtYWlsLmNvbSIsImlhdCI6MTc2MzA0ODU2NywiZXhwIjoxNzYzMDUyMTY3fQ.JIvv8s_LF3Z5WozX_4koOlGDqd2yK4-pYZJbesBUQNQ
