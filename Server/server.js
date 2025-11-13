@@ -12,6 +12,7 @@ import * as mlServices from "./ml-services.js";
 import aiRoutes from "./ai-routes.js";
 import * as aiServices from "./ai-content-service.js";
 dotenv.config();
+import fetch from "node-fetch";
 
 const app = express();
 app.use(cors());
@@ -227,7 +228,7 @@ app.post("/login", async (req, res) => {
     const token = jwt.sign(
       { id: user.id, email: user.email },
       process.env.JWT_SECRET,
-      { expiresIn: "1h" }
+      { expiresIn: "24h" }
     );
 
     res.status(200).json({
@@ -239,6 +240,9 @@ app.post("/login", async (req, res) => {
       learningStyle: tableData.learning_style,
       message: "Login successful",
     });
+
+    console.log(token);
+
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Internal server error" });
@@ -329,7 +333,24 @@ app.put(
 );
 
 
-app.post("/activity", authenticateToken, async(req,res) => {
+
+app.post("/activity", authenticateToken, async (req, res) => {
+  const {
+    subject,
+    reading_time,
+    playback_time,
+    quiz_score,
+    focus_level,
+    Learning_Type,
+    session_date,
+  } = req.body || {};
+
+  if (!subject && !Learning_Type) {
+    return res.status(400).json({
+      error: "Subject and activity_type are required.",
+    });
+  }
+
   try {
     const userId = req.userId;
     const {
@@ -343,23 +364,7 @@ app.post("/activity", authenticateToken, async(req,res) => {
       session_date,
     } = req.body;
 
-    if(!subject && !activity_type){
-      return res.status(400).json({ error: "Subject and activity_type are required.",});
-    }
-
-    const { data, error} = await supabase.from("activity_logs").insert([{
-       user_id: userId,
-        subject,
-        reading_time: reading_time || 0,
-        playback_time: playback_time || 0,
-        quiz_score: quiz_score || null,
-        focus_level: focus_level || null,
-        activity_type: activity_type || "unspecified",
-        device_used: device_used || "unknown",
-        session_date: session_date || new Date(),
-    }]).select().single();
-
-    if(error){
+    if (error) {
       console.error("Error inserting activity:", error.message);
       return res.status(400).json({ error: error.message });
     }
@@ -368,8 +373,36 @@ app.post("/activity", authenticateToken, async(req,res) => {
       message: "Study activity recorded successfully.",
       activity: data,
     });
-
   } catch (err) {
+    console.error("Server error:", err);
+    res.status(500).json({ error: "Internal server error." });
+  }
+});
+
+app.post("/visual-learning", authenticateToken, async(req,res) => {
+  const userId = req.userId;
+  const { quiz_score } = req.body;
+  const learning = "Audio Visual"
+
+  try {
+    const { data, error } = await supabase.from("quiz").insert([
+      {
+        user_id: userId,
+        Learning_Type: learning,
+        score: quiz_score ?? null,
+      }
+    ]).select().single();
+
+    if(error){
+      console.log("Server error", error);      
+      return res.status(500).json({error: "internal error"})
+    }
+
+    res.status(201).json({
+      message: "Study activity recorded successfully.",
+      activity: data,
+    });
+  } catch (error) {
     console.error("Server error:", err);
     res.status(500).json({ error: "Internal server error." });
   }
