@@ -8,6 +8,21 @@ import { GoogleGenAI } from "@google/genai";
 import mime from "mime";
 import fs from "fs";
 import path from "path";
+// import { text } from "body-parser";
+import bodyParser from "body-parser";
+import 'dotenv/config';
+
+
+if (!process.env.GOOGLE_AI_API_KEY) {
+  throw new Error('Missing GOOGLE_AI_API_KEY in .env file');
+}
+
+const genAI = new GoogleGenAI({
+  apiKey: process.env.GOOGLE_AI_API_KEY
+});
+
+
+const { text } = bodyParser;
 
 let supabaseClient = null;
 let aiApiKey = null;
@@ -69,7 +84,7 @@ export async function generatePersonalizedContent(userId, subject, topic, learni
 /**
  * Generate Visual Learning Content
  */
-async function generateVisualContent(subject, topic, difficulty, userContext) {
+export async function generateVisualContent(subject, topic, difficulty, userContext) {
   const prompt = `You are an expert educational content creator specializing in visual learning. 
 Create engaging visual learning content for the following:
 
@@ -127,11 +142,48 @@ Format the response as JSON with this structure:
   ],
   "summary": "Visual summary of key concepts"
 }`;
+  // try promting video
+  try {
 
-  return await callAI(prompt, {
+    const streamResponse = await genAI.models.generateContentStream({
+  model: 'gemini-2.5-flash-image',
+  config: {
     temperature: 0.7,
-    max_tokens: 2000,
-  });
+    maxOutputTokens: 2000,
+  },
+  contents: [{
+    role: 'user',
+    parts: [{
+      text: prompt,
+    }],
+  }],
+});
+
+console.log(genAI);
+
+
+let output = '';
+for await (const chunk of streamResponse) {
+  if (chunk.text) {
+    output += chunk.text;
+  } else if (chunk.candidates?.[0]?.content?.parts?.[0]?.text) {
+    output += chunk.candidates[0].content.parts[0].text;
+  }
+}
+return output;
+
+  } catch (error) {
+    console.error("Gemini API error:", error);
+    return "AI generation failed";
+  }
+
+
+  // return await callAI(prompt, {
+  //   temperature: 0.7,
+  //   max_tokens: 2000,
+  // });
+
+
 }
 
 /**
@@ -1873,4 +1925,5 @@ async function callOllama(prompt, options = {}) {
     throw error;
   }
 }
+
 

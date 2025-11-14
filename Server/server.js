@@ -12,7 +12,8 @@ import * as mlServices from "./ml-services.js";
 import aiRoutes from "./ai-routes.js";
 import * as aiServices from "./ai-content-service.js";
 dotenv.config();
-import fetch from "node-fetch";
+import genAI from './geminiClient.js';
+
 
 const app = express();
 app.use(cors());
@@ -42,7 +43,6 @@ console.log('🔍 AI Configuration Check:');
 console.log(`   Provider: ${aiProvider}`);
 console.log(`   API Key found: ${aiApiKey ? 'Yes (' + aiApiKey.substring(0, 10) + '...)' : 'No'}`);
 console.log(`   GOOGLE_AI_API_KEY: ${process.env.GOOGLE_AI_API_KEY ? 'Set' : 'Not set'}`);
-
 // Ollama doesn't need an API key (runs locally)
 if (aiProvider === 'ollama') {
   aiServices.initializeAIServices(supabase, null, aiProvider);
@@ -759,6 +759,33 @@ app.post("/adaptive-content", authenticateToken, async (req, res) => {
       error: "Internal server error",
       details: err.message,
     });
+  }
+});
+
+
+app.get("/activitylog", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.userId;
+    console.log("Fetching activity logs for userId:", userId);
+
+    const { data: activity_logs, error } = await supabase
+      .from("activity_logs")
+      .select("*")
+      .eq("user_id", userId);
+
+    if (error || !activity_logs) {
+      console.error("Supabase returned error:", error);
+      return res.status(404).json({ error: "Activity logs not found" });
+    }
+
+    res.json({
+      message: "Activity logs fetched successfully",
+      activity_logs,
+    });
+
+  } catch (error) {
+    console.error("Server error:", error);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
