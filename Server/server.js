@@ -335,22 +335,6 @@ app.put(
 
 
 app.post("/activity", authenticateToken, async (req, res) => {
-  const {
-    subject,
-    reading_time,
-    playback_time,
-    quiz_score,
-    focus_level,
-    Learning_Type,
-    session_date,
-  } = req.body || {};
-
-  if (!subject && !Learning_Type) {
-    return res.status(400).json({
-      error: "Subject and activity_type are required.",
-    });
-  }
-
   try {
     const userId = req.userId;
     const {
@@ -364,17 +348,78 @@ app.post("/activity", authenticateToken, async (req, res) => {
       session_date,
     } = req.body;
 
-    if (error) {
-      console.error("Error inserting activity:", error.message);
-      return res.status(400).json({ error: error.message });
+    // Log received data for validation
+    console.log("📥 Received activity log data:");
+    console.log(`   User ID: ${userId}`);
+    console.log(`   Subject: ${subject}`);
+    console.log(`   Activity Type: ${activity_type}`);
+    console.log(`   Reading Time: ${reading_time || 0}s`);
+    console.log(`   Playback Time: ${playback_time || 0}`);
+    console.log(`   Quiz Score: ${quiz_score || 'N/A'}%`);
+
+    if (!subject || !activity_type) {
+      console.error("❌ Validation failed: Missing subject or activity_type");
+      return res.status(400).json({
+        error: "Subject and activity_type are required.",
+      });
     }
+
+    // Prepare data for insertion
+    const activityData = {
+      user_id: userId,
+      subject,
+      activity_type,
+      quiz_score: quiz_score || null,
+      focus_level: focus_level || null,
+      reading_time: reading_time || 0,
+      playback_time: playback_time || 0,
+      device_used: device_used || null,
+      session_date: session_date || new Date().toISOString(),
+    };
+    
+    console.log("💾 Attempting to save to activity_logs:");
+    console.log(`   Data:`, JSON.stringify(activityData, null, 2));
+
+    // Insert into activity_logs table
+    const { data, error } = await supabase
+      .from("activity_logs")
+      .insert([activityData])
+      .select()
+      .single();
+
+    if (error) {
+      console.error("❌ Error inserting activity:", error);
+      console.error(`   Error Code: ${error.code}`);
+      console.error(`   Error Message: ${error.message}`);
+      console.error(`   Error Details:`, error);
+      return res.status(500).json({ 
+        error: "Failed to save activity",
+        details: error.message 
+      });
+    }
+
+    // Validate saved data
+    console.log("✅ Activity logged successfully!");
+    console.log(`   Activity ID: ${data.id}`);
+    console.log(`   Saved Reading Time: ${data.reading_time || 'N/A'}s (expected: ${reading_time || 0}s)`);
+    console.log(`   Saved Playback Time: ${data.playback_time || 'N/A'} (expected: ${playback_time || 0})`);
+    
+    // Validation check
+    if (data.reading_time !== (reading_time || 0)) {
+      console.warn(`⚠️ Reading time mismatch! Expected: ${reading_time || 0}s, Got: ${data.reading_time}s`);
+    }
+    if (data.playback_time !== (playback_time || 0)) {
+      console.warn(`⚠️ Playback time mismatch! Expected: ${playback_time || 0}, Got: ${data.playback_time}`);
+    }
+    
+    console.log(`   Full saved record:`, JSON.stringify(data, null, 2));
 
     res.status(201).json({
       message: "Study activity recorded successfully.",
       activity: data,
     });
   } catch (err) {
-    console.error("Server error:", err);
+    console.error("❌ Server error:", err);
     res.status(500).json({ error: "Internal server error." });
   }
 });
@@ -407,6 +452,315 @@ app.post("/visual-learning", authenticateToken, async(req,res) => {
     res.status(500).json({ error: "Internal server error." });
   }
 })
+
+/**
+ * POST /quiz-progress
+ * Save detailed quiz progress including individual question responses
+ */
+app.post("/quiz-progress", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.userId;
+    const {
+      subject,
+      topic,
+      learning_type,
+      difficulty,
+      total_questions,
+      correct_answers,
+      score,
+      time_taken,
+      reading_time_seconds, // Reading time in seconds (for text learning)
+      audio_play_count, // Audio play count (for audio learning)
+      responses, // Array of question responses
+    } = req.body;
+
+    // Log received data for validation
+    console.log("📥 Received quiz progress data:");
+    console.log(`   User ID: ${userId}`);
+    console.log(`   Subject: ${subject}`);
+    console.log(`   Learning Type: ${learning_type}`);
+    console.log(`   Reading Time (seconds): ${reading_time_seconds || 0}`);
+    console.log(`   Audio Play Count: ${audio_play_count || 0}`);
+    console.log(`   Score: ${score || 'N/A'}%`);
+    console.log(`   Total Questions: ${total_questions}`);
+
+    // Validation
+    if (!subject || !total_questions || !responses || !Array.isArray(responses)) {
+      console.error("❌ Validation failed: Missing required fields");
+      return res.status(400).json({
+        error: "Missing required fields: subject, total_questions, and responses array are required.",
+      });
+    }
+
+    // Calculate score if not provided
+    const calculatedScore = score !== undefined 
+      ? parseFloat(score) 
+      : (correct_answers / total_questions) * 100;
+
+    // Map reading_time_seconds and audio_play_count to reading_time and playback_time
+    // reading_time is in seconds, playback_time is the count of audio plays
+    const readingTime = reading_time_seconds || 0;
+    const playbackTime = audio_play_count || 0;
+    
+    console.log("📊 Mapped engagement metrics:");
+    console.log(`   Reading Time: ${readingTime}s`);
+    console.log(`   Playback Time (count): ${playbackTime}`);
+
+    // Prepare data for insertion
+    const activityLogData = {
+      user_id: userId,
+      subject,
+      activity_type: learning_type || "mixed",
+      quiz_score: Math.round(calculatedScore),
+      focus_level: calculatedScore >= 80 ? 85 : calculatedScore >= 60 ? 70 : 50,
+      reading_time: readingTime, // Use tracked reading time
+      playback_time: playbackTime, // Use tracked playback count
+      session_date: new Date().toISOString(),
+    };
+    
+    console.log("💾 Attempting to save to activity_logs:");
+    console.log(`   Data:`, JSON.stringify(activityLogData, null, 2));
+
+    // Save to activity_logs table instead of quiz_attempts
+    const { data: activityData, error: activityError } = await supabase
+      .from("activity_logs")
+      .insert([activityLogData])
+      .select()
+      .single();
+
+    if (activityError) {
+      console.error("❌ Error inserting quiz activity:", activityError);
+      console.error(`   Error Code: ${activityError.code}`);
+      console.error(`   Error Message: ${activityError.message}`);
+      console.error(`   Error Details:`, activityError);
+      return res.status(500).json({
+        error: "Failed to save quiz activity",
+        details: activityError.message,
+      });
+    }
+
+    // Validate saved data
+    console.log("✅ Quiz progress saved to activity_logs successfully!");
+    console.log(`   Activity ID: ${activityData.id}`);
+    console.log(`   Subject: ${subject}, Score: ${calculatedScore}%, Questions: ${total_questions}/${correct_answers} correct`);
+    console.log(`   Saved Reading Time: ${activityData.reading_time || 'N/A'}s (expected: ${readingTime}s)`);
+    console.log(`   Saved Playback Time: ${activityData.playback_time || 'N/A'} (expected: ${playbackTime})`);
+    
+    // Validation check
+    if (activityData.reading_time !== readingTime) {
+      console.warn(`⚠️ Reading time mismatch! Expected: ${readingTime}s, Got: ${activityData.reading_time}s`);
+    }
+    if (activityData.playback_time !== playbackTime) {
+      console.warn(`⚠️ Playback time mismatch! Expected: ${playbackTime}, Got: ${activityData.playback_time}`);
+    }
+    
+    console.log(`   Full saved record:`, JSON.stringify(activityData, null, 2));
+
+    res.status(201).json({
+      success: true,
+      message: "Quiz progress saved successfully",
+      activity: activityData,
+      quiz_summary: {
+        total_questions,
+        correct_answers: correct_answers || 0,
+        score: calculatedScore,
+        responses_count: responses.length,
+      },
+    });
+  } catch (err) {
+    console.error("Server error in quiz-progress:", err);
+    res.status(500).json({
+      error: "Internal server error",
+      details: err.message,
+    });
+  }
+});
+
+/**
+ * POST /adaptive-content
+ * Save or update engagement data (audio play count, reading time, etc.) to adaptivecontent table
+ * Uses upsert to update existing records or create new ones
+ */
+app.post("/adaptive-content", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.userId;
+    const {
+      subject,
+      topic,
+      learning_type,
+      audio_play_count,
+      video_play_count,
+      reading_time_seconds,
+      quiz_score,
+    } = req.body;
+
+    // Log received data for validation
+    console.log("📥 Received adaptive content data:");
+    console.log(`   User ID: ${userId}`);
+    console.log(`   Subject: ${subject}`);
+    console.log(`   Topic: ${topic || 'N/A'}`);
+    console.log(`   Learning Type: ${learning_type}`);
+    console.log(`   Reading Time (seconds): ${reading_time_seconds || 0}`);
+    console.log(`   Audio Play Count: ${audio_play_count || 0}`);
+    console.log(`   Quiz Score: ${quiz_score || 'N/A'}%`);
+
+    // Validation
+    if (!subject || !learning_type) {
+      console.error("❌ Validation failed: Missing subject or learning_type");
+      return res.status(400).json({
+        error: "Missing required fields: subject and learning_type are required.",
+      });
+    }
+
+    // Calculate confidence based on engagement and performance
+    // Higher engagement + better score = higher confidence
+    let engagementScore = 0;
+    if (learning_type === "audio") {
+      // Each audio play = 20 points, max 100
+      engagementScore = Math.min(100, (audio_play_count || 0) * 20);
+    } else if (learning_type === "visual") {
+      // Each video play = 20 points, max 100 (for future use)
+      engagementScore = Math.min(100, (video_play_count || 0) * 20);
+    } else if (learning_type === "text") {
+      // 10 seconds of reading = 1 point, max 100
+      engagementScore = Math.min(100, (reading_time_seconds || 0) / 10);
+    }
+
+    // Combine engagement and quiz performance for confidence (0.0 to 1.0)
+    const quizScoreWeight = quiz_score !== undefined ? quiz_score : 0;
+    const confidence = (engagementScore * 0.4 + quizScoreWeight * 0.6) / 100;
+
+    // Prepare data for upsert
+    const adaptiveData = {
+      user_id: userId,
+      subject,
+      topic: topic || null,
+      "contentType": learning_type, // Keep contentType for backward compatibility
+      learning_type: learning_type,
+      confidence: Math.max(0, Math.min(1, confidence)), // Clamp between 0 and 1
+      audio_play_count: audio_play_count || 0,
+      video_play_count: video_play_count || 0,
+      reading_time_seconds: reading_time_seconds || 0,
+      updated_at: new Date().toISOString(),
+    };
+    
+    console.log("📊 Calculated engagement metrics:");
+    console.log(`   Engagement Score: ${engagementScore}/100`);
+    console.log(`   Confidence: ${confidence.toFixed(2)}`);
+    console.log("💾 Attempting to save/update adaptivecontent:");
+    console.log(`   Data:`, JSON.stringify(adaptiveData, null, 2));
+
+    // Check if record already exists
+    const { data: existingData, error: selectError } = await supabase
+      .from("adaptivecontent")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("subject", subject)
+      .eq("topic", topic || null)
+      .eq("learning_type", learning_type)
+      .maybeSingle();
+
+    let result;
+    let isUpdate = false;
+    
+    if (existingData && !selectError) {
+      // Update existing record
+      console.log(`   Existing record found (ID: ${existingData.id}), updating...`);
+      isUpdate = true;
+      const updateData = {
+        confidence: Math.max(0, Math.min(1, confidence)),
+        audio_play_count: audio_play_count || 0,
+        video_play_count: video_play_count || 0,
+        reading_time_seconds: reading_time_seconds || 0,
+        updated_at: new Date().toISOString(),
+      };
+      
+      console.log(`   Update data:`, JSON.stringify(updateData, null, 2));
+      
+      const { data: updatedData, error: updateError } = await supabase
+        .from("adaptivecontent")
+        .update(updateData)
+        .eq("id", existingData.id)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error("❌ Error updating adaptive content:", updateError);
+        throw updateError;
+      }
+
+      // Validate saved data
+      console.log("✅ Engagement data updated successfully!");
+      console.log(`   Record ID: ${updatedData.id}`);
+      console.log(`   Saved Reading Time: ${updatedData.reading_time_seconds || 'N/A'}s (expected: ${reading_time_seconds || 0}s)`);
+      console.log(`   Saved Audio Play Count: ${updatedData.audio_play_count || 'N/A'} (expected: ${audio_play_count || 0})`);
+      console.log(`   Saved Confidence: ${updatedData.confidence || 'N/A'}`);
+      
+      // Validation check
+      if (updatedData.reading_time_seconds !== (reading_time_seconds || 0)) {
+        console.warn(`⚠️ Reading time mismatch! Expected: ${reading_time_seconds || 0}s, Got: ${updatedData.reading_time_seconds}s`);
+      }
+      if (updatedData.audio_play_count !== (audio_play_count || 0)) {
+        console.warn(`⚠️ Audio play count mismatch! Expected: ${audio_play_count || 0}, Got: ${updatedData.audio_play_count}`);
+      }
+      
+      console.log(`   Full saved record:`, JSON.stringify(updatedData, null, 2));
+
+      result = {
+        success: true,
+        message: "Engagement data updated successfully",
+        data: updatedData,
+      };
+    } else {
+      // Create new record
+      console.log(`   No existing record found, creating new...`);
+      const { data: newData, error: insertError } = await supabase
+        .from("adaptivecontent")
+        .insert([adaptiveData])
+        .select()
+        .single();
+
+      if (insertError) {
+        console.error("❌ Error saving engagement data:", insertError);
+        console.error(`   Error Code: ${insertError.code}`);
+        console.error(`   Error Message: ${insertError.message}`);
+        console.error(`   Error Details:`, insertError);
+        throw insertError;
+      }
+
+      // Validate saved data
+      console.log("✅ Engagement data saved successfully!");
+      console.log(`   Record ID: ${newData.id}`);
+      console.log(`   Saved Reading Time: ${newData.reading_time_seconds || 'N/A'}s (expected: ${reading_time_seconds || 0}s)`);
+      console.log(`   Saved Audio Play Count: ${newData.audio_play_count || 'N/A'} (expected: ${audio_play_count || 0})`);
+      console.log(`   Saved Confidence: ${newData.confidence || 'N/A'}`);
+      
+      // Validation check
+      if (newData.reading_time_seconds !== (reading_time_seconds || 0)) {
+        console.warn(`⚠️ Reading time mismatch! Expected: ${reading_time_seconds || 0}s, Got: ${newData.reading_time_seconds}s`);
+      }
+      if (newData.audio_play_count !== (audio_play_count || 0)) {
+        console.warn(`⚠️ Audio play count mismatch! Expected: ${audio_play_count || 0}, Got: ${newData.audio_play_count}`);
+      }
+      
+      console.log(`   Full saved record:`, JSON.stringify(newData, null, 2));
+
+      result = {
+        success: true,
+        message: "Engagement data saved successfully",
+        data: newData,
+      };
+    }
+
+    res.status(isUpdate ? 200 : 201).json(result);
+  } catch (err) {
+    console.error("Server error in adaptive-content:", err);
+    res.status(500).json({
+      error: "Internal server error",
+      details: err.message,
+    });
+  }
+});
 
 // ML/AI Routes - All routes require authentication
 app.use("/api/ml", authenticateToken, mlRoutes);
