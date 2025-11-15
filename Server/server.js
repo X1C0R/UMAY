@@ -19,8 +19,24 @@ app.use(cors());
 app.use(express.json());
 const upload = multer({dest: "uploads/"});
 
-// Serve static files from uploads directory (for audio files, images, etc.)
-app.use('/uploads', express.static('uploads'));
+// Serve static files from uploads directory (for audio files, images, videos, etc.)
+// Enable CORS for video files and set proper headers
+app.use('/uploads', express.static('uploads', {
+  setHeaders: (res, path) => {
+    // Set CORS headers for video files
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Range');
+    
+    // Set proper content type for video files
+    if (path.endsWith('.mp4')) {
+      res.set('Content-Type', 'video/mp4');
+      res.set('Accept-Ranges', 'bytes');
+    } else if (path.endsWith('.mp3')) {
+      res.set('Content-Type', 'audio/mpeg');
+    }
+  }
+}));
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -364,59 +380,128 @@ app.post("/activity", authenticateToken, async (req, res) => {
       });
     }
 
-    // Prepare data for insertion
-    const activityData = {
-      user_id: userId,
-      subject,
-      activity_type,
-      quiz_score: quiz_score || null,
-      focus_level: focus_level || null,
-      reading_time: reading_time || 0,
-      playback_time: playback_time || 0,
-      device_used: device_used || null,
-      session_date: session_date || new Date().toISOString(),
-    };
-    
-    console.log("💾 Attempting to save to activity_logs:");
-    console.log(`   Data:`, JSON.stringify(activityData, null, 2));
-
-    // Insert into activity_logs table
-    const { data, error } = await supabase
+    // Check if record already exists for this user, subject, and activity_type
+    const { data: existingRecord, error: selectError } = await supabase
       .from("activity_logs")
-      .insert([activityData])
-      .select()
-      .single();
+      .select("id, reading_time, playback_time, quiz_score, focus_level")
+      .eq("user_id", userId)
+      .eq("subject", subject)
+      .eq("activity_type", activity_type)
+      .maybeSingle();
 
-    if (error) {
-      console.error("❌ Error inserting activity:", error);
-      console.error(`   Error Code: ${error.code}`);
-      console.error(`   Error Message: ${error.message}`);
-      console.error(`   Error Details:`, error);
+    if (selectError && selectError.code !== 'PGRST116') { // PGRST116 = no rows returned
+      console.error("❌ Error checking existing record:", selectError);
       return res.status(500).json({ 
-        error: "Failed to save activity",
-        details: error.message 
+        error: "Failed to check existing activity",
+        details: selectError.message 
       });
     }
 
-    // Validate saved data
-    console.log("✅ Activity logged successfully!");
-    console.log(`   Activity ID: ${data.id}`);
-    console.log(`   Saved Reading Time: ${data.reading_time || 'N/A'}s (expected: ${reading_time || 0}s)`);
-    console.log(`   Saved Playback Time: ${data.playback_time || 'N/A'} (expected: ${playback_time || 0})`);
-    
-    // Validation check
-    if (data.reading_time !== (reading_time || 0)) {
-      console.warn(`⚠️ Reading time mismatch! Expected: ${reading_time || 0}s, Got: ${data.reading_time}s`);
-    }
-    if (data.playback_time !== (playback_time || 0)) {
-      console.warn(`⚠️ Playback time mismatch! Expected: ${playback_time || 0}, Got: ${data.playback_time}`);
-    }
-    
-    console.log(`   Full saved record:`, JSON.stringify(data, null, 2));
+    let result;
+    let isUpdate = false;
 
-    res.status(201).json({
-      message: "Study activity recorded successfully.",
-      activity: data,
+    if (existingRecord) {
+      // Update existing record - accumulate engagement metrics
+      console.log(`   Existing record found (ID: ${existingRecord.id}), updating...`);
+      isUpdate = true;
+      
+      // Accumulate reading_time and playback_time (add new values to existing)
+      const updatedReadingTime = (existingRecord.reading_time || 0) + (reading_time || 0);
+      const updatedPlaybackTime = (existingRecord.playback_time || 0) + (playback_time || 0);
+      
+      // Update quiz_score and focus_level if provided (use latest values)
+      const updateData = {
+        reading_time: updatedReadingTime,
+        playback_time: updatedPlaybackTime,
+        session_date: session_date || new Date().toISOString(),
+      };
+      
+      // Only update quiz_score and focus_level if new values are provided
+      if (quiz_score !== null && quiz_score !== undefined) {
+        updateData.quiz_score = quiz_score;
+      }
+      if (focus_level !== null && focus_level !== undefined) {
+        updateData.focus_level = focus_level;
+      }
+      if (device_used) {
+        updateData.device_used = device_used;
+      }
+      
+      console.log(`   Update data:`, JSON.stringify(updateData, null, 2));
+      console.log(`   Previous reading_time: ${existingRecord.reading_time || 0}s, adding: ${reading_time || 0}s, new total: ${updatedReadingTime}s`);
+      console.log(`   Previous playback_time: ${existingRecord.playback_time || 0}, adding: ${playback_time || 0}, new total: ${updatedPlaybackTime}`);
+      
+      const { data: updatedData, error: updateError } = await supabase
+        .from("activity_logs")
+        .update(updateData)
+        .eq("id", existingRecord.id)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error("❌ Error updating activity:", updateError);
+        console.error(`   Error Code: ${updateError.code}`);
+        console.error(`   Error Message: ${updateError.message}`);
+        return res.status(500).json({ 
+          error: "Failed to update activity",
+          details: updateError.message 
+        });
+      }
+
+      result = updatedData;
+    } else {
+      // Insert new record
+      console.log(`   No existing record found, creating new...`);
+      const activityData = {
+        user_id: userId,
+        subject,
+        activity_type,
+        quiz_score: quiz_score || null,
+        focus_level: focus_level || null,
+        reading_time: reading_time || 0,
+        playback_time: playback_time || 0,
+        device_used: device_used || null,
+        session_date: session_date || new Date().toISOString(),
+      };
+      
+      console.log("💾 Attempting to insert new record:");
+      console.log(`   Data:`, JSON.stringify(activityData, null, 2));
+
+      const { data: insertedData, error: insertError } = await supabase
+        .from("activity_logs")
+        .insert([activityData])
+        .select()
+        .single();
+
+      if (insertError) {
+        console.error("❌ Error inserting activity:", insertError);
+        console.error(`   Error Code: ${insertError.code}`);
+        console.error(`   Error Message: ${insertError.message}`);
+        console.error(`   Error Details:`, insertError);
+        return res.status(500).json({ 
+          error: "Failed to save activity",
+          details: insertError.message 
+        });
+      }
+
+      result = insertedData;
+    }
+
+    // Validate saved data
+    console.log(`✅ Activity ${isUpdate ? 'updated' : 'logged'} successfully!`);
+    console.log(`   Activity ID: ${result.id}`);
+    console.log(`   Saved Reading Time: ${result.reading_time || 'N/A'}s`);
+    console.log(`   Saved Playback Time: ${result.playback_time || 'N/A'}`);
+    console.log(`   Saved Quiz Score: ${result.quiz_score || 'N/A'}%`);
+    console.log(`   Saved Focus Level: ${result.focus_level || 'N/A'}%`);
+    console.log(`   Full saved record:`, JSON.stringify(result, null, 2));
+
+    res.status(isUpdate ? 200 : 201).json({
+      message: isUpdate 
+        ? "Study activity updated successfully." 
+        : "Study activity recorded successfully.",
+      activity: result,
+      isUpdate: isUpdate,
     });
   } catch (err) {
     console.error("❌ Server error:", err);
@@ -506,60 +591,121 @@ app.post("/quiz-progress", authenticateToken, async (req, res) => {
     console.log(`   Reading Time: ${readingTime}s`);
     console.log(`   Playback Time (count): ${playbackTime}`);
 
-    // Prepare data for insertion
-    const activityLogData = {
-      user_id: userId,
-      subject,
-      activity_type: learning_type || "mixed",
-      quiz_score: Math.round(calculatedScore),
-      focus_level: calculatedScore >= 80 ? 85 : calculatedScore >= 60 ? 70 : 50,
-      reading_time: readingTime, // Use tracked reading time
-      playback_time: playbackTime, // Use tracked playback count
-      session_date: new Date().toISOString(),
-    };
-    
-    console.log("💾 Attempting to save to activity_logs:");
-    console.log(`   Data:`, JSON.stringify(activityLogData, null, 2));
-
-    // Save to activity_logs table instead of quiz_attempts
-    const { data: activityData, error: activityError } = await supabase
+    // Check if record already exists for this user, subject, and learning_type
+    // (This should exist from when user clicked "I'm Ready for Quiz")
+    const { data: existingRecord, error: selectError } = await supabase
       .from("activity_logs")
-      .insert([activityLogData])
-      .select()
-      .single();
+      .select("id, reading_time, playback_time, quiz_score, focus_level")
+      .eq("user_id", userId)
+      .eq("subject", subject)
+      .eq("activity_type", learning_type || "mixed")
+      .maybeSingle();
 
-    if (activityError) {
-      console.error("❌ Error inserting quiz activity:", activityError);
-      console.error(`   Error Code: ${activityError.code}`);
-      console.error(`   Error Message: ${activityError.message}`);
-      console.error(`   Error Details:`, activityError);
+    if (selectError && selectError.code !== 'PGRST116') { // PGRST116 = no rows returned
+      console.error("❌ Error checking existing record:", selectError);
       return res.status(500).json({
-        error: "Failed to save quiz activity",
-        details: activityError.message,
+        error: "Failed to check existing activity",
+        details: selectError.message,
       });
     }
 
+    let activityData;
+    let isUpdate = false;
+
+    if (existingRecord) {
+      // Update existing record with quiz results
+      console.log(`   Existing record found (ID: ${existingRecord.id}), updating with quiz results...`);
+      isUpdate = true;
+      
+      // Keep existing reading_time and playback_time (already saved before quiz)
+      // Only update quiz_score and focus_level with quiz results
+      const updateData = {
+        quiz_score: Math.round(calculatedScore),
+        focus_level: calculatedScore >= 80 ? 85 : calculatedScore >= 60 ? 70 : 50,
+        session_date: new Date().toISOString(),
+        // Keep existing reading_time and playback_time
+        reading_time: existingRecord.reading_time || readingTime,
+        playback_time: existingRecord.playback_time || playbackTime,
+      };
+      
+      console.log(`   Update data:`, JSON.stringify(updateData, null, 2));
+      console.log(`   Previous reading_time: ${existingRecord.reading_time || 0}s (preserved)`);
+      console.log(`   Previous playback_time: ${existingRecord.playback_time || 0} (preserved)`);
+      console.log(`   Updating quiz_score: ${updateData.quiz_score}%, focus_level: ${updateData.focus_level}%`);
+      
+      const { data: updatedData, error: updateError } = await supabase
+        .from("activity_logs")
+        .update(updateData)
+        .eq("id", existingRecord.id)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error("❌ Error updating quiz activity:", updateError);
+        console.error(`   Error Code: ${updateError.code}`);
+        console.error(`   Error Message: ${updateError.message}`);
+        console.error(`   Error Details:`, updateError);
+        return res.status(500).json({
+          error: "Failed to update quiz activity",
+          details: updateError.message,
+        });
+      }
+
+      activityData = updatedData;
+    } else {
+      // Insert new record (fallback if record wasn't created before quiz)
+      console.log(`   No existing record found, creating new with quiz results...`);
+      const insertData = {
+        user_id: userId,
+        subject,
+        activity_type: learning_type || "mixed",
+        quiz_score: Math.round(calculatedScore),
+        focus_level: calculatedScore >= 80 ? 85 : calculatedScore >= 60 ? 70 : 50,
+        reading_time: readingTime,
+        playback_time: playbackTime,
+        session_date: new Date().toISOString(),
+      };
+      
+      console.log("💾 Attempting to insert new record:");
+      console.log(`   Data:`, JSON.stringify(insertData, null, 2));
+
+      const { data: insertedData, error: insertError } = await supabase
+        .from("activity_logs")
+        .insert([insertData])
+        .select()
+        .single();
+
+      if (insertError) {
+        console.error("❌ Error inserting quiz activity:", insertError);
+        console.error(`   Error Code: ${insertError.code}`);
+        console.error(`   Error Message: ${insertError.message}`);
+        console.error(`   Error Details:`, insertError);
+        return res.status(500).json({
+          error: "Failed to save quiz activity",
+          details: insertError.message,
+        });
+      }
+
+      activityData = insertedData;
+    }
+
     // Validate saved data
-    console.log("✅ Quiz progress saved to activity_logs successfully!");
+    console.log(`✅ Quiz progress ${isUpdate ? 'updated' : 'saved'} to activity_logs successfully!`);
     console.log(`   Activity ID: ${activityData.id}`);
     console.log(`   Subject: ${subject}, Score: ${calculatedScore}%, Questions: ${total_questions}/${correct_answers} correct`);
-    console.log(`   Saved Reading Time: ${activityData.reading_time || 'N/A'}s (expected: ${readingTime}s)`);
-    console.log(`   Saved Playback Time: ${activityData.playback_time || 'N/A'} (expected: ${playbackTime})`);
-    
-    // Validation check
-    if (activityData.reading_time !== readingTime) {
-      console.warn(`⚠️ Reading time mismatch! Expected: ${readingTime}s, Got: ${activityData.reading_time}s`);
-    }
-    if (activityData.playback_time !== playbackTime) {
-      console.warn(`⚠️ Playback time mismatch! Expected: ${playbackTime}, Got: ${activityData.playback_time}`);
-    }
-    
+    console.log(`   Saved Reading Time: ${activityData.reading_time || 'N/A'}s`);
+    console.log(`   Saved Playback Time: ${activityData.playback_time || 'N/A'}`);
+    console.log(`   Saved Quiz Score: ${activityData.quiz_score || 'N/A'}%`);
+    console.log(`   Saved Focus Level: ${activityData.focus_level || 'N/A'}%`);
     console.log(`   Full saved record:`, JSON.stringify(activityData, null, 2));
 
-    res.status(201).json({
+    res.status(isUpdate ? 200 : 201).json({
       success: true,
-      message: "Quiz progress saved successfully",
+      message: isUpdate 
+        ? "Quiz progress updated successfully" 
+        : "Quiz progress saved successfully",
       activity: activityData,
+      isUpdate: isUpdate,
       quiz_summary: {
         total_questions,
         correct_answers: correct_answers || 0,
@@ -643,7 +789,7 @@ app.post("/adaptive-content", authenticateToken, async (req, res) => {
       reading_time_seconds: reading_time_seconds || 0,
       updated_at: new Date().toISOString(),
     };
-    
+                                                       
     console.log("📊 Calculated engagement metrics:");
     console.log(`   Engagement Score: ${engagementScore}/100`);
     console.log(`   Confidence: ${confidence.toFixed(2)}`);

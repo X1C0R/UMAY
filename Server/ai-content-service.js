@@ -8,6 +8,7 @@ import { GoogleGenAI } from "@google/genai";
 import mime from "mime";
 import fs from "fs";
 import path from "path";
+import { generateVideoFromText, setTTSFunction } from "./video-generation-service.js";
 
 let supabaseClient = null;
 let aiApiKey = null;
@@ -18,6 +19,9 @@ export function initializeAIServices(supabase, apiKey, provider = 'openai') {
   supabaseClient = supabase;
   aiApiKey = apiKey;
   aiProvider = provider;
+  
+  // Set TTS function for video generation service
+  setTTSFunction(generateTTSAudioSimple);
   
   // Initialize Google Generative AI client if using Google provider
   if (provider === 'google' && apiKey) {
@@ -78,60 +82,97 @@ Topic: ${topic}
 Difficulty: ${difficulty}
 User Context: ${userContext}
 
-CRITICAL: Generate VERY CONCISE and SUMMARIZED content. Keep responses SHORT but INFORMATIVE. 
-- Limit to 2-3 sections MAXIMUM
-- Each section: 1-2 paragraphs MAXIMUM (not 2-3)
-- Introduction: 2-3 sentences only
-- Examples: 1-2 examples per section, keep brief
-- Summary: 1-2 paragraphs only
-Prioritize completeness over length. The ENTIRE JSON must fit within 6000 tokens and be complete.
+CRITICAL INSTRUCTIONS - READ CAREFULLY:
+1. You MUST respond with ONLY valid, complete JSON. Do NOT use markdown code blocks (no \`\`\`json or \`\`\`).
+2. Keep ALL content EXTREMELY CONCISE. Every text field must be SHORT.
+3. Limit to 2 visual elements MAXIMUM
+4. Each description: 1 sentence MAX (20-30 words MAX)
+5. Each content: 2-3 sentences MAX (40-60 words MAX) - NOT a paragraph!
+6. colorScheme: Simple description (e.g., "blue and green") - 5-10 words MAX
+7. Do NOT truncate the response. The JSON must be complete and properly closed.
+8. Start with { and end with }. Return ONLY the JSON object, nothing else.
+9. Prioritize completeness over length - ensure the entire JSON fits within token limits.
 
-Generate a comprehensive visual learning module that includes:
-1. Visual explanations with diagrams, charts, or illustrations descriptions
-2. Step-by-step visual guides
-3. Color-coded concepts
-4. Visual mnemonics
-5. Interactive visual examples
-6. Visual practice problems with solutions
-
-Format the response as JSON with this structure:
+Generate a concise visual learning module with this EXACT structure (keep all text fields VERY SHORT):
 {
-  "title": "Topic Title",
+  "title": "Topic Title (5-8 words max)",
   "visualElements": [
     {
       "type": "diagram|chart|illustration|timeline",
-      "description": "Description of visual element",
-      "content": "Detailed content for this visual element",
-      "colorScheme": "Suggested color scheme"
+      "description": "Brief description (1 sentence MAX, 20-30 words)",
+      "content": "Brief content (2-3 sentences MAX, 40-60 words)",
+      "colorScheme": "Simple color scheme (5-10 words MAX)"
     }
   ],
   "stepByStepGuide": [
     {
       "step": 1,
-      "visualDescription": "What to visualize",
-      "explanation": "Explanation of this step"
+      "visualDescription": "What to visualize (1 sentence MAX, 15-20 words)",
+      "explanation": "Explanation (1 sentence MAX, 15-20 words)"
     }
   ],
   "visualMnemonics": [
     {
-      "concept": "Concept name",
-      "visualMnemonic": "Visual memory aid description"
+      "concept": "Concept name (2-4 words)",
+      "visualMnemonic": "Memory aid (1 sentence MAX, 15-20 words)"
     }
   ],
   "practiceProblems": [
     {
-      "problem": "Problem statement",
-      "visualHint": "Visual approach hint",
-      "solution": "Solution with visual explanation"
+      "problem": "Problem (1 sentence MAX, 15-20 words)",
+      "visualHint": "Hint (1 sentence MAX, 10-15 words)",
+      "solution": "Solution (1 sentence MAX, 15-20 words)"
     }
   ],
-  "summary": "Visual summary of key concepts"
-}`;
+  "summary": "Summary (2-3 sentences MAX, 40-60 words)",
+  "relatedVideoLinks": [
+    {
+      "title": "Video title (5-10 words)",
+      "url": "Full YouTube or educational video URL",
+      "description": "Brief description (1 sentence MAX, 15-20 words)"
+    }
+  ]
+}
 
-  return await callAI(prompt, {
+CRITICAL: Keep EVERY text field SHORT. description and content must be 1-3 sentences MAX, not paragraphs!
+IMPORTANT: For relatedVideoLinks, provide 2-3 relevant YouTube or educational video URLs that complement this topic. Use real, accessible video URLs.`;
+
+  // First, generate the content structure with text descriptions
+  const content = await callAI(prompt, {
     temperature: 0.7,
-    max_tokens: 2000,
+    max_tokens: 3000, // Increased for visual content (has more fields)
   });
+
+  // Generate video from text content (optional - don't block if it fails)
+  // Note: Video generation requires FFmpeg to be installed
+  if (content && (content.visualElements || content.sections || content.title)) {
+    try {
+      console.log('🎬 Attempting to generate video tutorial from visual content...');
+      console.log('   Note: This requires FFmpeg to be installed on the server');
+      const videoUrl = await generateVideoFromText(content, subject, topic);
+      if (videoUrl) {
+        content.videoUrl = videoUrl;
+        console.log(`✅ Video generated successfully: ${videoUrl}`);
+      } else {
+        console.warn('⚠️ Video generation returned no URL');
+      }
+    } catch (videoError) {
+      // Check if it's an FFmpeg error
+      if (videoError.message?.includes('FFmpeg is not installed')) {
+        console.warn('⚠️ Video generation skipped: FFmpeg is not installed');
+        console.warn('   Install FFmpeg to enable video generation: https://ffmpeg.org/download.html');
+      } else {
+        console.error('❌ Error generating video (continuing without video):', videoError.message);
+      }
+      console.log('   Content is still available without video');
+      // Continue without video - visual content is still available
+      // Don't set videoUrl so frontend won't try to display it
+    }
+  }
+  
+  console.log(`✅ Visual content generated with ${content.visualElements?.length || 0} visual element(s)`);
+  
+  return content;
 }
 
 /**
@@ -179,10 +220,18 @@ Generate a concise audio learning module with this EXACT structure (keep all tex
     }
   ],
   "audioSummary": "Brief summary (1 sentence, 20-30 words MAX)",
-  "recapPoints": ["Key point 1", "Key point 2"]
+  "recapPoints": ["Key point 1", "Key point 2"],
+  "relatedVideoLinks": [
+    {
+      "title": "Video title (5-10 words)",
+      "url": "Full YouTube or educational video URL",
+      "description": "Brief description (1 sentence MAX, 15-20 words)"
+    }
+  ]
 }
 
-CRITICAL: Keep EVERY text field SHORT. verbalMnemonic must be 5-8 words only. audioScript must be 2 sentences max.`;
+CRITICAL: Keep EVERY text field SHORT. verbalMnemonic must be 5-8 words only. audioScript must be 2 sentences max.
+IMPORTANT: For relatedVideoLinks, provide 2-3 relevant YouTube or educational video URLs that complement this topic. Use real, accessible video URLs.`;
 
   // First, generate the content structure
   // Increased tokens to ensure complete JSON responses (was 1200, but responses were still truncated)
@@ -635,74 +684,111 @@ Topic: ${topic}
 Difficulty: ${difficulty}
 User Context: ${userContext}
 
-CRITICAL: Generate VERY CONCISE and SUMMARIZED content. Keep responses SHORT but INFORMATIVE. 
-- Limit to 2-3 sections MAXIMUM
-- Each section: 1-2 paragraphs MAXIMUM (not 2-3)
-- Introduction: 2-3 sentences only
-- Examples: 1-2 examples per section, keep brief
-- Summary: 1-2 paragraphs only
-Prioritize completeness over length. The ENTIRE JSON must fit within 6000 tokens and be complete.
+CRITICAL INSTRUCTIONS - READ CAREFULLY:
+1. You MUST respond with ONLY valid, complete JSON. Do NOT use markdown code blocks (no \`\`\`json or \`\`\`).
+2. Keep ALL content EXTREMELY CONCISE. Every text field must be SHORT.
+3. Limit to 2 sections MAXIMUM (not 2-3)
+4. Each section content: 1 paragraph MAXIMUM (100-150 words MAX)
+5. Introduction: 2 sentences MAX (30-40 words)
+6. Each example: 1-2 sentences MAX
+7. Case studies: 1 sentence description, 1 sentence analysis MAX
+8. Practice problems: Brief problem statement (1 sentence)
+9. Summary: 1 paragraph MAX (50-80 words)
+10. Do NOT truncate the response. The JSON must be complete and properly closed.
+11. Start with { and end with }. Return ONLY the JSON object, nothing else.
+12. Prioritize completeness over length - ensure the entire JSON fits within token limits.
 
-Generate a comprehensive text-based learning module that includes:
-1. Detailed written explanations
-2. Structured reading material
-3. Written examples and case studies
-4. Text-based practice problems
-5. Written summaries and notes
-6. Reading comprehension questions
-
-Format the response as JSON with this structure (STRICT LIMITS: 2-3 sections MAX, 1-2 examples per section, 1-2 paragraphs per section):
+Generate a concise text-based learning module with this EXACT structure (keep all text fields VERY SHORT):
 {
-  "title": "Topic Title",
-      "introduction": "Brief written introduction (2-3 sentences MAX)",
-      "sections": [
-        {
-          "heading": "Section heading",
-          "content": "VERY concise written content (1-2 paragraphs MAX)",
+  "title": "Topic Title (5-8 words max)",
+  "introduction": "Brief introduction (2 sentences MAX, 30-40 words)",
+  "sections": [
+    {
+      "heading": "Section heading (4-8 words)",
+      "content": "VERY concise content (1 paragraph MAX, 100-150 words)",
       "keyConcepts": ["Concept 1", "Concept 2", "Concept 3"],
       "examples": [
         {
-          "example": "Brief example description",
-          "explanation": "Concise explanation"
+          "example": "Brief example (1-2 sentences MAX)",
+          "explanation": "Concise explanation (1 sentence MAX)"
         }
       ]
     }
   ],
   "caseStudies": [
     {
-      "title": "Case study title",
-      "description": "Brief case study description",
-      "analysis": "Concise analysis and key takeaways"
+      "title": "Case study title (5-8 words)",
+      "description": "Brief description (1 sentence MAX)",
+      "analysis": "Concise analysis (1 sentence MAX)"
     }
   ],
   "practiceProblems": [
     {
-      "problem": "Brief problem statement",
-      "hint": "Text-based hint",
-      "solution": "Concise written solution",
-      "explanation": "Brief step-by-step explanation"
+      "problem": "Brief problem (1 sentence MAX)",
+      "hint": "Brief hint (1 sentence MAX)",
+      "solution": "Concise solution (1-2 sentences MAX)",
+      "explanation": "Brief explanation (1 sentence MAX)"
     }
   ],
   "readingComprehension": [
     {
-      "passage": "Short reading passage",
+      "passage": "Short passage (2-3 sentences MAX, 50-80 words)",
       "questions": [
         {
-          "question": "Comprehension question",
-          "answer": "Answer"
+          "question": "Comprehension question (1 sentence)",
+          "answer": "Brief answer (1 sentence)"
         }
       ]
     }
   ],
-  "summary": "Brief summary (1 paragraph only)",
+  "summary": "Brief summary (1 paragraph MAX, 50-80 words)",
   "keyTakeaways": ["Takeaway 1", "Takeaway 2", "Takeaway 3"],
-  "furtherReading": ["Suggested reading 1", "Suggested reading 2"]
-}`;
+  "furtherReading": ["Reading 1", "Reading 2"],
+  "relatedVideoLinks": [
+    {
+      "title": "Video title (5-10 words)",
+      "url": "Full YouTube or educational video URL",
+      "description": "Brief description (1 sentence MAX, 15-20 words)"
+    }
+  ]
+}
 
-  return await callAI(prompt, {
+CRITICAL: Keep EVERY text field SHORT. content must be 1 paragraph max. introduction must be 2 sentences max.
+IMPORTANT: For relatedVideoLinks, provide 2-3 relevant YouTube or educational video URLs that complement this topic. Use real, accessible video URLs.`;
+
+  const content = await callAI(prompt, {
     temperature: 0.7,
-    max_tokens: 3000, // Reduced to ensure complete JSON responses
+    max_tokens: 4000, // Increased for text content (has more fields: sections, caseStudies, practiceProblems, etc.)
   });
+
+  // Generate video from text content (optional - don't block if it fails)
+  // Note: Video generation requires FFmpeg to be installed
+  if (content && (content.sections || content.title)) {
+    try {
+      console.log('🎬 Attempting to generate video tutorial from text content...');
+      console.log('   Note: This requires FFmpeg to be installed on the server');
+      const videoUrl = await generateVideoFromText(content, subject, topic);
+      if (videoUrl) {
+        content.videoUrl = videoUrl;
+        console.log(`✅ Video generated successfully: ${videoUrl}`);
+      } else {
+        console.warn('⚠️ Video generation returned no URL');
+      }
+    } catch (videoError) {
+      // Check if it's an FFmpeg error
+      if (videoError.message?.includes('FFmpeg is not installed')) {
+        console.warn('⚠️ Video generation skipped: FFmpeg is not installed');
+        console.warn('   Install FFmpeg to enable video generation: https://ffmpeg.org/download.html');
+      } else {
+        console.error('❌ Error generating video (continuing without video):', videoError.message);
+      }
+      console.log('   Content is still available without video');
+      // Continue without video - text content is still available
+      // Don't set videoUrl so frontend won't try to display it
+    }
+  }
+
+  return content;
 }
 
 /**
@@ -1188,11 +1274,16 @@ async function callGoogleAI(prompt, options = {}) {
           repaired = repaired.substring(firstBrace);
         }
         
-        // FIRST: Fix any unterminated strings at the end (this is critical for quiz fields)
+        // FIRST: Fix any unterminated strings at the end (this is critical for quiz and content fields)
         // This must happen early before other repairs
         const truncatableFields = [
-          'hint', 'explanation', 'question', 'correctAnswer', 'content', 'description',
-          'verbalMnemonic', 'audioScript', 'audioIntroduction', 'audioSummary'
+          // Quiz fields
+          'hint', 'explanation', 'question', 'correctAnswer',
+          // Audio fields
+          'verbalMnemonic', 'audioScript', 'audioIntroduction', 'audioSummary',
+          // Text content fields
+          'content', 'description', 'introduction', 'title', 'heading',
+          'example', 'analysis', 'problem', 'solution', 'passage', 'summary'
         ];
         
         // Fix unterminated strings in known fields
@@ -1470,9 +1561,210 @@ async function callGoogleAI(prompt, options = {}) {
           } catch (repairError) {
             console.error('❌ JSON repair failed:', repairError.message);
             
-            // Last resort: Try to extract complete questions from quiz JSON
-            console.log('🔧 Attempting to extract complete quiz questions...');
+            // Last resort: Try to extract complete structures based on content type
+            console.log('🔧 Attempting to extract complete structures...');
             try {
+              // Check if this is text content with sections
+              const sectionsMatch = content.match(/\{\s*"sections"\s*:\s*\[/);
+              if (sectionsMatch) {
+                console.log('🔧 Detected text content with sections, extracting complete sections...');
+                const sectionsStart = sectionsMatch.index + sectionsMatch[0].length;
+                const sectionsEnd = content.indexOf(']', sectionsStart);
+                const contentEnd = sectionsEnd > sectionsStart ? sectionsEnd : content.length;
+                const sectionsContent = content.substring(sectionsStart, contentEnd);
+                
+                // Extract complete section objects
+                const completeSections = [];
+                let depth = 0;
+                let startPos = -1;
+                let inString = false;
+                let escapeNext = false;
+                
+                for (let i = 0; i < sectionsContent.length; i++) {
+                  const char = sectionsContent[i];
+                  
+                  if (escapeNext) {
+                    escapeNext = false;
+                    continue;
+                  }
+                  
+                  if (char === '\\') {
+                    escapeNext = true;
+                    continue;
+                  }
+                  
+                  if (char === '"' && !escapeNext) {
+                    inString = !inString;
+                    continue;
+                  }
+                  
+                  if (inString) continue;
+                  
+                  if (char === '{') {
+                    if (depth === 0) startPos = i;
+                    depth++;
+                  } else if (char === '}') {
+                    depth--;
+                    if (depth === 0 && startPos >= 0) {
+                      // Found a complete section object
+                      let sectionJson = sectionsContent.substring(startPos, i + 1);
+                      try {
+                        const parsed = JSON.parse(sectionJson);
+                        // Check if it has minimum required fields
+                        if (parsed.heading && parsed.content) {
+                          completeSections.push(sectionJson);
+                          console.log(`✅ Extracted complete section: ${parsed.heading}`);
+                        } else {
+                          // Try to repair the section
+                          const repairedSection = repairIncompleteJSON(sectionJson);
+                          const repairedParsed = JSON.parse(repairedSection);
+                          if (repairedParsed.heading) {
+                            completeSections.push(repairedSection);
+                            console.log(`✅ Repaired and extracted section: ${repairedParsed.heading}`);
+                          }
+                        }
+                      } catch (e) {
+                        // Try to repair
+                        try {
+                          const repairedSection = repairIncompleteJSON(sectionJson);
+                          const repairedParsed = JSON.parse(repairedSection);
+                          if (repairedParsed.heading) {
+                            completeSections.push(repairedSection);
+                            console.log(`✅ Repaired and extracted section: ${repairedParsed.heading}`);
+                          }
+                        } catch (repairErr) {
+                          console.log(`⚠️ Skipped invalid section at position ${startPos}`);
+                        }
+                      }
+                      startPos = -1;
+                    }
+                  }
+                }
+                
+                if (completeSections.length > 0) {
+                  // Reconstruct valid text content JSON
+                  const sectionsJson = completeSections.map((s, i) => 
+                    `    ${s}${i < completeSections.length - 1 ? ',' : ''}`
+                  ).join('\n');
+                  
+                  // Extract title and introduction if available (handle escaped quotes)
+                  const titleMatch = content.match(/"title"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+                  const introMatch = content.match(/"introduction"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+                  
+                  const reconstructed = `{
+  "title": ${titleMatch ? `"${titleMatch[1]}"` : '"Topic Title"'},
+  "introduction": ${introMatch ? `"${introMatch[1]}"` : '""'},
+  "sections": [
+${sectionsJson}
+  ],
+  "summary": "",
+  "keyTakeaways": []
+}`;
+                  const parsed = JSON.parse(reconstructed);
+                  console.log(`✅ Extracted ${completeSections.length} complete section(s) from truncated text content`);
+                  return parsed;
+                }
+              }
+              
+              // Check if this is visual content with visualElements
+              const visualElementsMatch = content.match(/\{\s*"visualElements"\s*:\s*\[/);
+              if (visualElementsMatch) {
+                console.log('🔧 Detected visual content with visualElements, extracting complete elements...');
+                const elementsStart = visualElementsMatch.index + visualElementsMatch[0].length;
+                const elementsEnd = content.indexOf(']', elementsStart);
+                const contentEnd = elementsEnd > elementsStart ? elementsEnd : content.length;
+                const elementsContent = content.substring(elementsStart, contentEnd);
+                
+                // Extract complete visual element objects
+                const completeElements = [];
+                let depth = 0;
+                let startPos = -1;
+                let inString = false;
+                let escapeNext = false;
+                
+                for (let i = 0; i < elementsContent.length; i++) {
+                  const char = elementsContent[i];
+                  
+                  if (escapeNext) {
+                    escapeNext = false;
+                    continue;
+                  }
+                  
+                  if (char === '\\') {
+                    escapeNext = true;
+                    continue;
+                  }
+                  
+                  if (char === '"' && !escapeNext) {
+                    inString = !inString;
+                    continue;
+                  }
+                  
+                  if (inString) continue;
+                  
+                  if (char === '{') {
+                    if (depth === 0) startPos = i;
+                    depth++;
+                  } else if (char === '}') {
+                    depth--;
+                    if (depth === 0 && startPos >= 0) {
+                      // Found a complete element object
+                      let elementJson = elementsContent.substring(startPos, i + 1);
+                      try {
+                        const parsed = JSON.parse(elementJson);
+                        // Check if it has minimum required fields
+                        if (parsed.type && parsed.description) {
+                          completeElements.push(elementJson);
+                          console.log(`✅ Extracted complete visual element: ${parsed.type}`);
+                        } else {
+                          // Try to repair the element
+                          const repairedElement = repairIncompleteJSON(elementJson);
+                          const repairedParsed = JSON.parse(repairedElement);
+                          if (repairedParsed.type) {
+                            completeElements.push(repairedElement);
+                            console.log(`✅ Repaired and extracted visual element: ${repairedParsed.type}`);
+                          }
+                        }
+                      } catch (e) {
+                        // Try to repair
+                        try {
+                          const repairedElement = repairIncompleteJSON(elementJson);
+                          const repairedParsed = JSON.parse(repairedElement);
+                          if (repairedParsed.type) {
+                            completeElements.push(repairedElement);
+                            console.log(`✅ Repaired and extracted visual element: ${repairedParsed.type}`);
+                          }
+                        } catch (repairErr) {
+                          console.log(`⚠️ Skipped invalid visual element at position ${startPos}`);
+                        }
+                      }
+                      startPos = -1;
+                    }
+                  }
+                }
+                
+                if (completeElements.length > 0) {
+                  // Reconstruct valid visual content JSON
+                  const elementsJson = completeElements.map((e, i) => 
+                    `    ${e}${i < completeElements.length - 1 ? ',' : ''}`
+                  ).join('\n');
+                  
+                  // Extract title if available
+                  const titleMatch = content.match(/"title"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+                  
+                  const reconstructed = `{
+  "title": ${titleMatch ? `"${titleMatch[1]}"` : '"Topic Title"'},
+  "visualElements": [
+${elementsJson}
+  ],
+  "summary": ""
+}`;
+                  const parsed = JSON.parse(reconstructed);
+                  console.log(`✅ Extracted ${completeElements.length} complete visual element(s) from truncated visual content`);
+                  return parsed;
+                }
+              }
+              
               // Special handling for quiz JSON - extract complete question objects
               const quizMatch = content.match(/\{\s*"questions"\s*:\s*\[/);
               if (quizMatch) {

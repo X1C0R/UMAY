@@ -18,13 +18,19 @@ export function initializeMLServices(supabase) {
  */
 export async function recommendLearningMode(userId, subject) {
   try {
-    // Fetch user's activity history
-    const { data: activities, error } = await supabaseClient
+    // Fetch user's activity history with subject filter if provided
+    let query = supabaseClient
       .from("activity_logs")
       .select("*")
       .eq("user_id", userId)
       .order("session_date", { ascending: false })
-      .limit(50);
+      .limit(100); // Increased limit for better analysis
+    
+    if (subject) {
+      query = query.eq("subject", subject);
+    }
+
+    const { data: activities, error } = await query;
 
     if (error) throw error;
 
@@ -32,62 +38,155 @@ export async function recommendLearningMode(userId, subject) {
       // Default recommendation for new users
       return {
         recommendedMode: "visual",
-        confidence: 0.5,
-        reasoning: "Insufficient data, using default recommendation",
+        confidence: 0.3,
+        reasoning: "No learning history found. We recommend starting with Visual Learning as it's effective for most learners.",
+        modeStats: {
+          visual: { totalScore: 0, totalSessions: 0, avgFocus: 0, engagementScore: 0 },
+          audio: { totalScore: 0, totalSessions: 0, avgFocus: 0, engagementScore: 0 },
+          text: { totalScore: 0, totalSessions: 0, avgFocus: 0, engagementScore: 0 },
+        },
       };
     }
 
-    // Calculate performance metrics per mode
+    // Calculate comprehensive performance metrics per mode
     const modePerformance = {
-      visual: { totalScore: 0, totalSessions: 0, avgFocus: 0 },
-      audio: { totalScore: 0, totalSessions: 0, avgFocus: 0 },
-      text: { totalScore: 0, totalSessions: 0, avgFocus: 0 },
+      visual: { totalScore: 0, totalSessions: 0, avgFocus: 0, engagementScore: 0, totalReadingTime: 0, totalPlaybackTime: 0 },
+      audio: { totalScore: 0, totalSessions: 0, avgFocus: 0, engagementScore: 0, totalReadingTime: 0, totalPlaybackTime: 0 },
+      text: { totalScore: 0, totalSessions: 0, avgFocus: 0, engagementScore: 0, totalReadingTime: 0, totalPlaybackTime: 0 },
     };
 
     activities.forEach((activity) => {
       const mode = activity.activity_type?.toLowerCase() || "visual";
       if (modePerformance[mode]) {
-        modePerformance[mode].totalScore += activity.quiz_score || 0;
+        const quizScore = parseFloat(activity.quiz_score) || 0;
+        const focusLevel = parseInt(activity.focus_level) || 0;
+        const readingTime = parseInt(activity.reading_time) || 0;
+        const playbackTime = parseInt(activity.playback_time) || 0;
+        
+        modePerformance[mode].totalScore += quizScore;
         modePerformance[mode].totalSessions += 1;
-        modePerformance[mode].avgFocus += activity.focus_level || 0;
+        modePerformance[mode].avgFocus += focusLevel;
+        modePerformance[mode].totalReadingTime += readingTime;
+        modePerformance[mode].totalPlaybackTime += playbackTime;
+        
+        // Calculate engagement score: reading time (for text) or playback count (for audio) or focus (for visual)
+        let engagement = 0;
+        if (mode === "text" && readingTime > 0) {
+          engagement = Math.min(100, readingTime / 10); // 10 seconds = 1 point, max 100
+        } else if (mode === "audio" && playbackTime > 0) {
+          engagement = Math.min(100, playbackTime * 20); // Each play = 20 points, max 100
+        } else if (mode === "visual" && focusLevel > 0) {
+          engagement = focusLevel; // Focus level is already 0-100
+        }
+        modePerformance[mode].engagementScore += engagement;
       }
     });
 
-    // Calculate weighted scores
+    // Calculate weighted scores with engagement metrics
     let bestMode = "visual";
     let bestScore = 0;
+    const modeScores = {};
 
     Object.keys(modePerformance).forEach((mode) => {
       const perf = modePerformance[mode];
       if (perf.totalSessions > 0) {
         const avgScore = perf.totalScore / perf.totalSessions;
         const avgFocus = perf.avgFocus / perf.totalSessions;
-        // Weighted score: 60% quiz score, 40% focus level
-        const weightedScore = avgScore * 0.6 + avgFocus * 0.4;
+        const avgEngagement = perf.engagementScore / perf.totalSessions;
+        
+        // Enhanced weighted score:
+        // 40% quiz performance, 30% focus level, 30% engagement
+        const weightedScore = (avgScore * 0.4) + (avgFocus * 0.3) + (avgEngagement * 0.3);
+        modeScores[mode] = weightedScore;
         
         if (weightedScore > bestScore) {
           bestScore = weightedScore;
           bestMode = mode;
         }
+      } else {
+        modeScores[mode] = 0;
       }
     });
 
-    // Calculate confidence based on data quality
+    // Calculate confidence based on data quality and consistency
     const totalSessions = activities.length;
-    const confidence = Math.min(0.5 + totalSessions * 0.01, 0.95);
+    const recommendedSessions = modePerformance[bestMode].totalSessions;
+    const dataQuality = Math.min(0.3 + (totalSessions * 0.01), 0.4); // Base confidence from total sessions
+    const modeConfidence = Math.min(0.3 + (recommendedSessions * 0.02), 0.4); // Confidence from mode-specific sessions
+    const scoreConfidence = bestScore > 0 ? Math.min(0.2, bestScore / 500) : 0.1; // Confidence from score quality
+    
+    const confidence = Math.min(dataQuality + modeConfidence + scoreConfidence, 0.95);
+
+    // Generate detailed reasoning
+    const recommendedStats = modePerformance[bestMode];
+    const avgScore = recommendedStats.totalSessions > 0 
+      ? Math.round(recommendedStats.totalScore / recommendedStats.totalSessions) 
+      : 0;
+    const avgFocus = recommendedStats.totalSessions > 0 
+      ? Math.round(recommendedStats.avgFocus / recommendedStats.totalSessions) 
+      : 0;
+    
+    let reasoning = `Based on ${totalSessions} learning session${totalSessions !== 1 ? 's' : ''}`;
+    if (subject) {
+      reasoning += ` in ${subject}`;
+    }
+    reasoning += `, ${bestMode} learning shows the best results`;
+    
+    if (recommendedStats.totalSessions > 0) {
+      reasoning += ` with an average score of ${avgScore}%`;
+      if (avgFocus > 0) {
+        reasoning += ` and focus level of ${avgFocus}%`;
+      }
+    }
+    reasoning += `.`;
+
+    // Add engagement insights
+    if (bestMode === "text" && recommendedStats.totalReadingTime > 0) {
+      const avgReadingTime = Math.round(recommendedStats.totalReadingTime / recommendedStats.totalSessions);
+      reasoning += ` You spent an average of ${avgReadingTime} seconds reading, showing strong engagement.`;
+    } else if (bestMode === "audio" && recommendedStats.totalPlaybackTime > 0) {
+      reasoning += ` You played audio content ${recommendedStats.totalPlaybackTime} time${recommendedStats.totalPlaybackTime !== 1 ? 's' : ''}, indicating good audio learning engagement.`;
+    }
 
     return {
       recommendedMode: bestMode,
       confidence: confidence,
-      reasoning: `Based on ${totalSessions} previous sessions, ${bestMode} mode shows best performance`,
-      modeStats: modePerformance,
+      reasoning: reasoning,
+      modeStats: {
+        visual: {
+          totalScore: modePerformance.visual.totalScore,
+          totalSessions: modePerformance.visual.totalSessions,
+          avgFocus: modePerformance.visual.totalSessions > 0 
+            ? Math.round(modePerformance.visual.avgFocus / modePerformance.visual.totalSessions) 
+            : 0,
+        },
+        audio: {
+          totalScore: modePerformance.audio.totalScore,
+          totalSessions: modePerformance.audio.totalSessions,
+          avgFocus: modePerformance.audio.totalSessions > 0 
+            ? Math.round(modePerformance.audio.avgFocus / modePerformance.audio.totalSessions) 
+            : 0,
+        },
+        text: {
+          totalScore: modePerformance.text.totalScore,
+          totalSessions: modePerformance.text.totalSessions,
+          avgFocus: modePerformance.text.totalSessions > 0 
+            ? Math.round(modePerformance.text.avgFocus / modePerformance.text.totalSessions) 
+            : 0,
+        },
+      },
     };
   } catch (error) {
     console.error("Error in recommendLearningMode:", error);
     return {
       recommendedMode: "visual",
-      confidence: 0.5,
-      reasoning: "Error in recommendation, using default",
+      confidence: 0.3,
+      reasoning: "Unable to analyze learning history. Starting with Visual Learning is recommended.",
+      modeStats: {
+        visual: { totalScore: 0, totalSessions: 0, avgFocus: 0 },
+        audio: { totalScore: 0, totalSessions: 0, avgFocus: 0 },
+        text: { totalScore: 0, totalSessions: 0, avgFocus: 0 },
+      },
     };
   }
 }
