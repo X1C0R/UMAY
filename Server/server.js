@@ -12,7 +12,8 @@ import * as mlServices from "./ml-services.js";
 import aiRoutes from "./ai-routes.js";
 import * as aiServices from "./ai-content-service.js";
 dotenv.config();
-import fetch from "node-fetch";
+import genAI from './geminiClient.js';
+
 
 const app = express();
 app.use(cors());
@@ -58,7 +59,6 @@ console.log('🔍 AI Configuration Check:');
 console.log(`   Provider: ${aiProvider}`);
 console.log(`   API Key found: ${aiApiKey ? 'Yes (' + aiApiKey.substring(0, 10) + '...)' : 'No'}`);
 console.log(`   GOOGLE_AI_API_KEY: ${process.env.GOOGLE_AI_API_KEY ? 'Set' : 'Not set'}`);
-
 // Ollama doesn't need an API key (runs locally)
 if (aiProvider === 'ollama') {
   aiServices.initializeAIServices(supabase, null, aiProvider);
