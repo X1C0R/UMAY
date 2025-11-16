@@ -33,11 +33,31 @@ export async function recommendLearningMode(userId, subject) {
     const { data: activities, error } = await query;
 
     if (error) throw error;
+    
+    // Also fetch quiz results from dedicated quiz table for better analysis
+    let quizQuery = supabaseClient
+      .from("quiz_results")
+      .select("*")
+      .eq("user_id", userId)
+      .order("completed_at", { ascending: false })
+      .limit(100);
+    
+    if (subject) {
+      quizQuery = quizQuery.eq("subject", subject);
+    }
+    
+    const { data: quizResults, error: quizError } = await quizQuery;
+    
+    if (quizError) {
+      console.warn("Error fetching quiz results (non-critical):", quizError);
+    }
 
-    if (!activities || activities.length === 0) {
+    // If no activities but we have quiz results, use quiz data
+    if ((!activities || activities.length === 0) && (!quizResults || quizResults.length === 0)) {
       // Default recommendation for new users
       return {
         recommendedMode: "visual",
+        bestPerformingMode: "visual", // Default to visual for new users
         confidence: 0.3,
         reasoning: "No learning history found. We recommend starting with Visual Learning as it's effective for most learners.",
         modeStats: {
@@ -55,6 +75,7 @@ export async function recommendLearningMode(userId, subject) {
       text: { totalScore: 0, totalSessions: 0, avgFocus: 0, engagementScore: 0, totalReadingTime: 0, totalPlaybackTime: 0 },
     };
 
+    // Process activity logs
     activities.forEach((activity) => {
       const mode = activity.activity_type?.toLowerCase() || "visual";
       if (modePerformance[mode]) {
@@ -81,11 +102,39 @@ export async function recommendLearningMode(userId, subject) {
         modePerformance[mode].engagementScore += engagement;
       }
     });
+    
+    // Process quiz results from dedicated quiz table (more accurate quiz data)
+    if (quizResults && quizResults.length > 0) {
+      quizResults.forEach((quiz) => {
+        const mode = quiz.learning_type?.toLowerCase() || "visual";
+        if (modePerformance[mode]) {
+          const quizScore = parseFloat(quiz.score) || 0;
+          
+          // Add quiz score to mode performance
+          modePerformance[mode].totalScore += quizScore;
+          modePerformance[mode].totalSessions += 1;
+          
+          // Quiz scores are more reliable than activity_logs quiz_score
+          // Use quiz score to estimate focus level
+          const estimatedFocus = quizScore >= 80 ? 85 : quizScore >= 60 ? 70 : 50;
+          modePerformance[mode].avgFocus += estimatedFocus;
+          
+          // Calculate engagement based on quiz performance
+          // Higher quiz scores indicate better engagement
+          const engagement = Math.min(100, quizScore);
+          modePerformance[mode].engagementScore += engagement;
+        }
+      });
+    }
 
     // Calculate weighted scores with engagement metrics
     let bestMode = "visual";
     let bestScore = 0;
     const modeScores = {};
+    
+    // Also track best performing mode (highest average quiz score) for topic generation
+    let bestPerformingMode = "visual";
+    let bestPerformingScore = 0;
 
     Object.keys(modePerformance).forEach((mode) => {
       const perf = modePerformance[mode];
@@ -103,13 +152,21 @@ export async function recommendLearningMode(userId, subject) {
           bestScore = weightedScore;
           bestMode = mode;
         }
+        
+        // Track best performing mode (highest average quiz score only)
+        // This is used for topic generation - what the user excels in
+        if (avgScore > bestPerformingScore) {
+          bestPerformingScore = avgScore;
+          bestPerformingMode = mode;
+        }
       } else {
         modeScores[mode] = 0;
       }
     });
 
     // Calculate confidence based on data quality and consistency
-    const totalSessions = activities.length;
+    // Include quiz results in total sessions count for better analysis
+    const totalSessions = (activities?.length || 0) + (quizResults?.length || 0);
     const recommendedSessions = modePerformance[bestMode].totalSessions;
     const dataQuality = Math.min(0.3 + (totalSessions * 0.01), 0.4); // Base confidence from total sessions
     const modeConfidence = Math.min(0.3 + (recommendedSessions * 0.02), 0.4); // Confidence from mode-specific sessions
@@ -127,6 +184,9 @@ export async function recommendLearningMode(userId, subject) {
       : 0;
     
     let reasoning = `Based on ${totalSessions} learning session${totalSessions !== 1 ? 's' : ''}`;
+    if (quizResults && quizResults.length > 0) {
+      reasoning += ` (including ${quizResults.length} quiz result${quizResults.length !== 1 ? 's' : ''})`;
+    }
     if (subject) {
       reasoning += ` in ${subject}`;
     }
@@ -149,7 +209,8 @@ export async function recommendLearningMode(userId, subject) {
     }
 
     return {
-      recommendedMode: bestMode,
+      recommendedMode: bestMode, // Best mode based on weighted score (quiz + focus + engagement)
+      bestPerformingMode: bestPerformingScore > 0 ? bestPerformingMode : bestMode, // Best mode based on quiz score only (for topic generation)
       confidence: confidence,
       reasoning: reasoning,
       modeStats: {
@@ -180,6 +241,7 @@ export async function recommendLearningMode(userId, subject) {
     console.error("Error in recommendLearningMode:", error);
     return {
       recommendedMode: "visual",
+      bestPerformingMode: "visual", // Default fallback
       confidence: 0.3,
       reasoning: "Unable to analyze learning history. Starting with Visual Learning is recommended.",
       modeStats: {

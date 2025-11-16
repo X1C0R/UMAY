@@ -289,5 +289,71 @@ router.post("/explain-answer", async (req, res) => {
   }
 });
 
+/**
+ * POST /api/ai/generate-topics
+ * Generate topics for a subject based on learning type
+ */
+router.post("/generate-topics", async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { subject, learningType, numTopics } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    if (!subject || !learningType) {
+      return res.status(400).json({ 
+        error: "Subject and learningType are required" 
+      });
+    }
+
+    // Validate learningType
+    const validLearningTypes = ['visual', 'audio', 'text'];
+    if (!validLearningTypes.includes(learningType.toLowerCase())) {
+      return res.status(400).json({ 
+        error: "learningType must be one of: visual, audio, text" 
+      });
+    }
+
+    const topics = await aiService.generateTopics(
+      subject,
+      learningType.toLowerCase(),
+      numTopics || 10
+    );
+
+    res.json({
+      success: true,
+      topics: topics,
+      learningType: learningType.toLowerCase(),
+    });
+  } catch (error) {
+    console.error("Error generating topics:", error);
+    
+    // Provide more specific error messages
+    let errorMessage = "Failed to generate topics";
+    if (error.message?.includes("API key") || error.message?.includes("not configured")) {
+      if (error.message?.includes("Ollama") && (error.message?.includes("connection refused") || error.message?.includes("ECONNREFUSED"))) {
+        errorMessage = "Ollama is not running. Install Ollama from https://ollama.ai, then run: ollama pull llama3.2";
+      } else if (error.message?.includes("Google") || error.message?.includes("Gemini")) {
+        errorMessage = "Google Gemini API key not configured. Please set GOOGLE_AI_API_KEY in server .env file.";
+      } else if (error.message?.includes("OpenAI")) {
+        errorMessage = "OpenAI API key not configured. Please set OPENAI_API_KEY in server .env file.";
+      } else {
+        errorMessage = "AI API key not configured. Please set GOOGLE_AI_API_KEY (free), OPENAI_API_KEY, or use Ollama (local, free) by setting AI_PROVIDER=ollama in server .env file.";
+      }
+    } else if (error.message?.includes("quota") || error.message?.includes("rate limit")) {
+      errorMessage = "AI API quota/rate limit exceeded. Please wait a moment and try again.";
+    } else if (error.message) {
+      errorMessage = error.message;
+    }
+    
+    res.status(500).json({ 
+      error: errorMessage,
+      message: error.message || "An unexpected error occurred"
+    });
+  }
+});
+
 export default router;
 

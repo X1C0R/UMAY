@@ -143,11 +143,11 @@ IMPORTANT: For relatedVideoLinks, provide 2-3 relevant YouTube or educational vi
     max_tokens: 3000, // Increased for visual content (has more fields)
   });
 
-  // Generate video from text content (optional - don't block if it fails)
+  // Visual learning type: Generate video ONLY for visual mode
   // Note: Video generation requires FFmpeg to be installed
   if (content && (content.visualElements || content.sections || content.title)) {
     try {
-      console.log('🎬 Attempting to generate video tutorial from visual content...');
+      console.log('🎬 Generating video tutorial for visual learning type...');
       console.log('   Note: This requires FFmpeg to be installed on the server');
       const videoUrl = await generateVideoFromText(content, subject, topic);
       if (videoUrl) {
@@ -240,6 +240,7 @@ IMPORTANT: For relatedVideoLinks, provide 2-3 relevant YouTube or educational vi
     max_tokens: 2500, // Increased to prevent truncation
   });
 
+  // Audio learning type: Generate audio ONLY for audio mode
   // Generate ONE combined audio file using simple TTS (uses generated text, not Gemini TTS model)
   // This avoids the Gemini TTS model overload issues (503 errors)
   if (content) {
@@ -761,32 +762,9 @@ IMPORTANT: For relatedVideoLinks, provide 2-3 relevant YouTube or educational vi
     max_tokens: 4000, // Increased for text content (has more fields: sections, caseStudies, practiceProblems, etc.)
   });
 
-  // Generate video from text content (optional - don't block if it fails)
-  // Note: Video generation requires FFmpeg to be installed
-  if (content && (content.sections || content.title)) {
-    try {
-      console.log('🎬 Attempting to generate video tutorial from text content...');
-      console.log('   Note: This requires FFmpeg to be installed on the server');
-      const videoUrl = await generateVideoFromText(content, subject, topic);
-      if (videoUrl) {
-        content.videoUrl = videoUrl;
-        console.log(`✅ Video generated successfully: ${videoUrl}`);
-      } else {
-        console.warn('⚠️ Video generation returned no URL');
-      }
-    } catch (videoError) {
-      // Check if it's an FFmpeg error
-      if (videoError.message?.includes('FFmpeg is not installed')) {
-        console.warn('⚠️ Video generation skipped: FFmpeg is not installed');
-        console.warn('   Install FFmpeg to enable video generation: https://ffmpeg.org/download.html');
-      } else {
-        console.error('❌ Error generating video (continuing without video):', videoError.message);
-      }
-      console.log('   Content is still available without video');
-      // Continue without video - text content is still available
-      // Don't set videoUrl so frontend won't try to display it
-    }
-  }
+  // Text learning type: Do NOT generate video or audio
+  // This reduces loading time and API costs for text-only learners
+  console.log('📝 Text content generated (no video/audio generation for text learning type)');
 
   return content;
 }
@@ -942,6 +920,118 @@ Format as JSON:
     temperature: 0.6,
     max_tokens: 800,
   });
+}
+
+/**
+ * Generate topics for a subject based on learning type
+ */
+export async function generateTopics(subject, learningType, numTopics = 10) {
+  const modeSpecificInstructions = {
+    visual: "Focus on topics that benefit from visual representation: diagrams, charts, graphs, spatial concepts, geometric shapes, visual patterns, and interactive visualizations.",
+    audio: "Focus on topics that work well with audio: explanations, narratives, discussions, verbal reasoning, storytelling, and conversational learning.",
+    text: "Focus on topics that are best learned through reading: detailed explanations, written examples, step-by-step guides, theory, and comprehensive documentation.",
+  };
+
+  const prompt = `You are an expert curriculum designer. Generate ${numTopics} learning topics for the subject "${subject}" optimized for ${learningType} learning.
+
+${modeSpecificInstructions[learningType.toLowerCase()] || ""}
+
+Requirements:
+- Topics should be progressive (from basic to advanced)
+- Each topic should be specific and actionable
+- Topics should be relevant to ${subject}
+- Mix of difficulty levels (easy, medium, hard)
+- Topics should build upon each other logically
+
+Format as JSON array:
+{
+  "topics": [
+    {
+      "id": "topic-1",
+      "title": "Topic Name (specific and clear)",
+      "description": "Brief description of what this topic covers (1-2 sentences)",
+      "learningType": "${learningType}",
+      "difficulty": "easy|medium|hard",
+      "createdAt": "ISO timestamp"
+    }
+  ]
+}
+
+CRITICAL INSTRUCTIONS:
+1. You MUST respond with ONLY valid, complete JSON. Do NOT use markdown code blocks (no \`\`\`json or \`\`\`).
+2. Start with { and end with }. Return ONLY the JSON object, nothing else.
+3. Generate exactly ${numTopics} topics.
+4. Ensure all topics are relevant to ${subject}.
+5. Make topic titles concise but descriptive (5-10 words max).
+6. Descriptions should be 1-2 sentences (20-40 words max).
+7. Distribute difficulty levels: ~30% easy, ~50% medium, ~20% hard.`;
+
+  try {
+    const response = await callAI(prompt, {
+      temperature: 0.8,
+      max_tokens: 2000,
+    });
+
+    // Parse the response
+    let jsonData;
+    if (typeof response === 'string') {
+      // Try to parse JSON from string
+      let jsonContent = response.trim();
+      
+      // Remove markdown code blocks if present
+      jsonContent = jsonContent.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+      
+      // Find JSON object
+      const jsonMatch = jsonContent.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        jsonContent = jsonMatch[0];
+      }
+      
+      jsonData = JSON.parse(jsonContent);
+    } else {
+      jsonData = response;
+    }
+
+    // Ensure we have topics array
+    if (!jsonData.topics || !Array.isArray(jsonData.topics)) {
+      throw new Error('Invalid response format: topics array not found');
+    }
+
+    // Validate and format topics
+    const formattedTopics = jsonData.topics.map((topic, index) => ({
+      id: topic.id || `topic-${Date.now()}-${index}`,
+      title: topic.title || `Topic ${index + 1}`,
+      description: topic.description || '',
+      learningType: topic.learningType || learningType,
+      difficulty: topic.difficulty || (index < 3 ? 'easy' : index < 7 ? 'medium' : 'hard'),
+      createdAt: topic.createdAt || new Date().toISOString(),
+    }));
+
+    return formattedTopics;
+  } catch (error) {
+    console.error('Error generating topics:', error);
+    
+    // Fallback: return default topics if AI generation fails
+    const defaultTopics = [
+      { id: 'topic-1', title: 'Introduction to ' + subject, description: 'Get started with the fundamentals', learningType, difficulty: 'easy', createdAt: new Date().toISOString() },
+      { id: 'topic-2', title: 'Core Concepts', description: 'Learn the essential concepts', learningType, difficulty: 'medium', createdAt: new Date().toISOString() },
+      { id: 'topic-3', title: 'Advanced Applications', description: 'Apply your knowledge to complex problems', learningType, difficulty: 'hard', createdAt: new Date().toISOString() },
+    ];
+    
+    // Generate more topics to reach numTopics
+    for (let i = defaultTopics.length; i < numTopics; i++) {
+      defaultTopics.push({
+        id: `topic-${i + 1}`,
+        title: `${subject} Topic ${i + 1}`,
+        description: `Learn about ${subject} concepts and applications`,
+        learningType,
+        difficulty: i < Math.floor(numTopics * 0.3) ? 'easy' : i < Math.floor(numTopics * 0.8) ? 'medium' : 'hard',
+        createdAt: new Date().toISOString(),
+      });
+    }
+    
+    return defaultTopics.slice(0, numTopics);
+  }
 }
 
 /**
