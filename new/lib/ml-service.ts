@@ -1,11 +1,12 @@
 // ML Service - Machine Learning API calls
 import { getToken } from './storage';
 
+const LOCAL_IP = '192.168.100.5';
+
 const getApiBaseUrl = () => {
   if (process.env.EXPO_PUBLIC_API_URL) {
     return process.env.EXPO_PUBLIC_API_URL;
   }
-  const LOCAL_IP = '192.168.100.66'; // Update this to match your server IP
   return `http://${LOCAL_IP}:4000`;
 };
 

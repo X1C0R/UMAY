@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
+import { useRouter } from "expo-router";
+import { useState } from "react";
 import {
   SafeAreaView,
   ScrollView,
@@ -9,8 +11,10 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+
+import { login as loginAPI, register as registerAPI } from "@/lib/api";
+
+import { storeToken, storeUserData } from "@/lib/storage";
 
 const LANGUAGE_OPTIONS = ["en", "ja", "ph"];
 const STYLE_OPTIONS = ["visual", "auditory", "reading", "kinesthetic", "mixed"];
@@ -36,33 +40,80 @@ export default function RegistrationScreen() {
   const [learningStyle, setLearningStyle] = useState(STYLE_OPTIONS[0]);
   const [formError, setFormError] = useState("");
 
-  const handleSubmit = () => {
-    const meetsPolicy =
-      password.length >= 8 &&
-      /[A-Z]/.test(password) &&
-      /[a-z]/.test(password) &&
-      /\d/.test(password);
+  const handleSubmit = async () => {
+  // Validate password policy
+  const meetsPolicy =
+    password.length >= 8 &&
+    /[A-Z]/.test(password) &&
+    /[a-z]/.test(password) &&
+    /\d/.test(password);
 
-    if (!meetsPolicy) {
-      setFormError("Password must meet all listed requirements.");
-      return;
-    }
+  if (!meetsPolicy) {
+    setFormError("Password must meet all listed requirements.");
+    return;
+  }
 
-    if (password !== confirmPassword) {
-      setFormError("Passwords do not match.");
-      return;
-    }
+  if (password !== confirmPassword) {
+    setFormError("Passwords do not match.");
+    return;
+  }
 
-    if (!firstName.trim() || !lastName.trim()) {
-      setFormError("First name and last name are required.");
-      return;
-    }
+  if (!firstName.trim() || !lastName.trim()) {
+    setFormError("First name and last name are required.");
+    return;
+  }
 
-    setFormError("");
+  setFormError("");
 
-    // TODO: Replace with API integration
+  try {
+    // --- Call REGISTER API ---
+    const fullName = `${firstName} ${middleName} ${lastName}`.trim();
+
+    const registerResponse = await registerAPI({
+      email: email.trim(),
+      password: password.trim(),
+      fullName,
+      avatarUrl: avatarUrl || undefined,
+      preferredLanguage,
+      learningStyle,
+    });
+
+    // --- Auto-login right after successful registration ---
+    const loginResponse = await loginAPI({
+      email: email.trim(),
+      password: password.trim(),
+    });
+
+    // --- Store token & user data ---
+    await storeToken(loginResponse.token);
+    await storeUserData({
+      email: loginResponse.email,
+      fullName: loginResponse.fullName,
+      avatarUrl: loginResponse.avatarUrl,
+      preferredLanguage: loginResponse.preferredLanguage,
+      learningStyle: loginResponse.learningStyle,
+    });
+
+    // --- Navigate to onboarding ---
     router.push("/onboarding");
-  };
+
+  } catch (error: any) {
+    const errorMessage = error.message || "Registration failed. Please try again.";
+
+    let userMessage = errorMessage;
+
+    if (errorMessage.includes("Cannot connect to server")) {
+      userMessage = "Cannot connect to server. Please check your connection.";
+    } else if (errorMessage.includes("already exists")) {
+      userMessage = "Email is already registered.";
+    }
+
+    setFormError(userMessage);
+
+    setTimeout(() => setFormError(""), 5000);
+  }
+};
+
 
   return (
     <LinearGradient
@@ -593,5 +644,3 @@ const styles = StyleSheet.create({
     color: "#1890FF",
   },
 });
-
-

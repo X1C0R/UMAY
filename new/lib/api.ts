@@ -4,7 +4,8 @@
 
 // Update this IP address to match your computer's local IP address
 // You can find it by running: ipconfig (Windows) or ifconfig (Mac/Linux)
-const LOCAL_IP = '192.168.100.66';
+
+const LOCAL_IP = '192.168.100.5';
 
 const getApiBaseUrl = () => {
   // Allow environment variable override
@@ -138,4 +139,44 @@ export async function getProfile(token: string): Promise<any> {
     throw error;
   }
 }
+
+export async function updateProfile(
+  authToken: string,
+  userData: {
+    full_name?: string;
+    avatar?: any; 
+  }
+): Promise<any> {
+  try {
+    const form = new FormData();
+
+    if (userData.full_name) form.append("full_name", userData.full_name);
+    if (userData.avatar) form.append("avatar", userData.avatar);
+
+    const response = await fetch(`${API_BASE_URL}/edit`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: form,
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || `Update Failed: ${response.status}`);
+    }
+
+    return await response.json();
+  } catch (error: any) {
+    if (error.message.includes("Network")) {
+      throw new Error(
+        `Cannot connect to server at ${API_BASE_URL}. Make sure it's running.`
+      );
+    }
+    throw error;
+  }
+}
+
+
+
 

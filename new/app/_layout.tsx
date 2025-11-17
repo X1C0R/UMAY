@@ -39,9 +39,10 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <StatusBar style="light" />
       <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="index" />
+         <Stack.Screen name="login" />
+        {/* <Stack.Screen name="index" />
         <Stack.Screen name="register" />
-        <Stack.Screen name="login" />
+       
         <Stack.Screen name="preference" />
         <Stack.Screen name="journey" />
         <Stack.Screen name="analytics" />
@@ -52,7 +53,7 @@ export default function RootLayout() {
         <Stack.Screen name="adaptation" />
         <Stack.Screen name="mode-switch" />
         <Stack.Screen name="subject-overview" />
-        <Stack.Screen name="behavior" />
+        <Stack.Screen name="behavior" /> */}
       </Stack>
     </SafeAreaProvider>
   );

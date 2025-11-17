@@ -6,11 +6,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useEngagement } from "../hooks/use-engagement";
 import { useMLRecommendation } from "../hooks/use-ml-recommendation";
 
-const MODES = [
-  { id: "visual", label: "Visual", icon: "eye" },
-  { id: "audio", label: "Audio", icon: "headphones" },
-  { id: "text", label: "Text", icon: "book-open-variant" },
-];
+
 
 const METRICS = [
   {
@@ -290,46 +286,6 @@ export default function ModeSwitchScreen() {
                   ? recommendation.reasoning || "Monitoring live signals to confirm the optimal learning mode for this session."
                   : "Monitoring live signals to confirm the optimal learning mode for this session."}
           </Text>
-
-            <View style={[styles.modeRow, dynamicStyles.modeRow, isCompact && styles.modeRowCompact]}>
-            {MODES.map((mode) => {
-              const isActive = mode.id === activeMode;
-              return (
-                  <TouchableOpacity
-                  key={mode.id}
-                    style={[
-                      styles.modeChip, 
-                      dynamicStyles.modeChip,
-                      isActive && styles.modeChipActive, 
-                      isCompact && styles.modeChipCompact
-                    ]}
-                    onPress={() => {
-                      router.push({
-                        pathname: "/learning-type-test",
-                        params: {
-                          subject: params.subject,
-                          topic: "Algebra Basics", // You can make this dynamic
-                        },
-                      });
-                    }}
-                    activeOpacity={0.7}
-                >
-                  <MaterialCommunityIcons
-                    name={mode.icon as never}
-                      size={dynamicStyles.modeIcon}
-                    color={isActive ? "#FFFFFF" : "#64748B"}
-                  />
-                    <Text style={[
-                      styles.modeChipLabel, 
-                      dynamicStyles.modeChipLabel,
-                      isActive && styles.modeChipLabelActive
-                    ]}>
-                    {mode.label}
-                  </Text>
-                  </TouchableOpacity>
-              );
-            })}
-          </View>
 
             <TouchableOpacity
               style={styles.testButton}
@@ -853,4 +809,3 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
   },
 });
-
