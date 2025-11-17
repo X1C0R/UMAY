@@ -11,6 +11,9 @@ import mlRoutes from "./ml-routes.js";
 import * as mlServices from "./ml-services.js";
 import aiRoutes from "./ai-routes.js";
 import * as aiServices from "./ai-content-service.js";
+import topicsRoutes, { initializeTopicsRoutes } from "./topics-routes.js";
+import quizRoutes, { initializeQuizRoutes } from "./quiz-routes.js";
+import learningTypesRoutes, { initializeLearningTypesRoutes } from "./learning-types-routes.js";
 dotenv.config();
 import genAI from './geminiClient.js';
 
@@ -46,6 +49,15 @@ const supabase = createClient(
 
 // Initialize ML Services
 mlServices.initializeMLServices(supabase);
+
+// Initialize Topics Routes
+initializeTopicsRoutes(supabase);
+
+// Initialize Quiz Routes
+initializeQuizRoutes(supabase);
+
+// Initialize Learning Types Routes
+initializeLearningTypesRoutes(supabase);
 
 // Initialize AI Services
 // Supports: 'openai', 'anthropic', 'google', 'ollama'
@@ -918,6 +930,9 @@ app.post("/adaptive-content", authenticateToken, async (req, res) => {
 // ML/AI Routes - All routes require authentication
 app.use("/api/ml", authenticateToken, mlRoutes);
 app.use("/api/ai", authenticateToken, aiRoutes);
+app.use("/api/topics", authenticateToken, topicsRoutes);
+app.use("/api/quiz", authenticateToken, quizRoutes);
+app.use("/api/learning-types", authenticateToken, learningTypesRoutes);
 
 // START SERVER
 const PORT = process.env.PORT || 4000;
