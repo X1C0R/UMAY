@@ -143,7 +143,9 @@ app.post("/register", async (req, res) => {
     const {
       email,
       password,
-      fullName,
+      first_name,
+      middle_name,
+      last_name,
       avatarUrl,
       preferredLanguage,
       learningStyle,
@@ -162,7 +164,7 @@ app.post("/register", async (req, res) => {
       await supabase.auth.admin.createUser({
         email,
         password,
-        user_metadata: { fullName, date_of_birth },
+        user_metadata: { first_name, middle_name, last_name, date_of_birth },
         email_confirm: false,
       });
 
@@ -177,7 +179,9 @@ app.post("/register", async (req, res) => {
           id: authData.user.id,
           email: authData.user.email,
           password_hash,
-          full_name: fullName,
+          first_name: first_name,
+          middle_name: middle_name,
+          last_name: last_name,
           avatar_url: avatarUrl || null,
           preferred_language: preferredLanguage || "en",
           learning_style: learningStyle || "mixed",
@@ -196,7 +200,9 @@ app.post("/register", async (req, res) => {
     res.status(201).json({
       id: tableData.id,
       email: tableData.email,
-      full_name: tableData.full_name,
+      first_name: tableData.first_name,
+      middle_name: tableData.middle_name,
+      last_name: tableData.last_name,
       avatar_url: tableData.avatar_url,
       preferred_language: tableData.preferred_language,
       learning_style: tableData.learning_style,
@@ -303,12 +309,8 @@ app.get("/profile", authenticateToken, async (req, res) => {
   }
 });
 
-app.put(
-  "/edit",
-  authenticateToken,
-  upload.single("avatar"),
-  async (req, res) => {
-    const { full_name } = req.body;
+app.put("/edit",authenticateToken, upload.single("avatar"), async (req, res) => {
+    const { first_name, middle_name, last_name } = req.body;
     const userId = req.userId;
     let avatar_url;
 
@@ -341,7 +343,10 @@ app.put(
 
       // Prepare update object
       const updateObj = { updated_at: new Date().toISOString() };
-      if (full_name) updateObj.full_name = full_name;
+      // if (full_name) updateObj.full_name = full_name;
+      if (first_name) updateObj.first_name = first_name;
+      if(middle_name) updateObj.middle_name = middle_name;
+      if(last_name) updateObj.last_name = last_name;
       if (avatar_url) updateObj.avatar_url = avatar_url;
 
       // Update user in Supabase
