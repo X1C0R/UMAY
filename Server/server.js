@@ -238,7 +238,7 @@ app.post("/login", async (req, res) => {
     const { data: tableData, error: tableError } = await supabase
       .from("users")
       .select(
-        "password_hash, full_name, avatar_url, preferred_language, learning_style, status"
+        "password_hash, first_name, middle_name, last_name, avatar_url, preferred_language, learning_style, status"
       )
       .eq("email", email)
       .single();
@@ -256,13 +256,15 @@ app.post("/login", async (req, res) => {
     const token = jwt.sign(
       { id: user.id, email: user.email },
       process.env.JWT_SECRET,
-      { expiresIn: "24h" }
+      { expiresIn: "1d" }
     );
 
     res.status(200).json({
       token,
       email,
-      fullName: tableData.full_name,
+      first_name: tableData.first_name,
+      middle_name: tableData.middle_name,
+      last_name: tableData.last_name,
       avatarUrl: tableData.avatar_url,
       preferredLanguage: tableData.preferred_language,
       learningStyle: tableData.learning_style,
