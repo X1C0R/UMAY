@@ -42,6 +42,15 @@ export function initializeAIServices(supabase, apiKey, provider = 'openai') {
  */
 export async function generatePersonalizedContent(userId, subject, topic, learningMode, difficulty = 'medium') {
   try {
+    // Safety check: ensure learningMode is defined and has a default value
+    if (!learningMode || typeof learningMode !== 'string') {
+      learningMode = 'text'; // Default to text if undefined/null
+      console.log(`[AI Service] learningMode was undefined/null, defaulting to 'text'`);
+    }
+    
+    // Normalize learningMode to lowercase
+    learningMode = learningMode.toLowerCase();
+    
     // Get user's learning history for context
     const { data: activities } = await supabaseClient
       .from("activity_logs")
@@ -54,7 +63,7 @@ export async function generatePersonalizedContent(userId, subject, topic, learni
     const userContext = buildUserContext(activities, learningMode);
 
     // Generate content based on learning mode
-    switch (learningMode.toLowerCase()) {
+    switch (learningMode) {
       case 'visual':
         return await generateVisualContent(subject, topic, difficulty, userContext);
       case 'audio':
@@ -81,6 +90,13 @@ Subject: ${subject}
 Topic: ${topic}
 Difficulty: ${difficulty}
 User Context: ${userContext}
+
+CRITICAL SUBJECT-SPECIFIC REQUIREMENTS:
+- The content MUST be directly related to "${subject}" and the topic "${topic}"
+- DO NOT use generic examples from unrelated subjects 
+- If the subject is "${subject}", ALL content, examples, and explanations must be about "${subject}" concepts
+- For example, if subject is "Korean-nlp-development" or "Japanese-for-tech", focus on "${subject}"
+- Use examples and concepts that are relevant to "${subject}" specifically
 
 CRITICAL INSTRUCTIONS - READ CAREFULLY:
 1. You MUST respond with ONLY valid, complete JSON. Do NOT use markdown code blocks (no \`\`\`json or \`\`\`).
@@ -193,6 +209,13 @@ Subject: ${subject}
 Topic: ${topic}
 Difficulty: ${difficulty}
 User Context: ${userContext}
+
+CRITICAL SUBJECT-SPECIFIC REQUIREMENTS:
+- The content MUST be directly related to "${subject}" and the topic "${topic}"
+- DO NOT use generic examples from unrelated subjects (e.g., do NOT use algebra examples if the subject is about language, NLP, or Korean)
+- If the subject is "${subject}", ALL content, examples, and explanations must be about "${subject}" concepts
+- For example, if subject is "Korean-nlp-development" or "Japanese-for-tech", focus on Korean/Japanese language, NLP concepts, tech terminology, NOT algebra or math
+- Use examples and concepts that are relevant to "${subject}" specifically
 
 CRITICAL INSTRUCTIONS - READ CAREFULLY:
 1. You MUST respond with ONLY valid, complete JSON. Do NOT use markdown code blocks (no \`\`\`json or \`\`\`).
@@ -685,6 +708,14 @@ Topic: ${topic}
 Difficulty: ${difficulty}
 User Context: ${userContext}
 
+CRITICAL SUBJECT-SPECIFIC REQUIREMENTS:
+- The content MUST be directly related to "${subject}" and the topic "${topic}"
+- DO NOT use generic examples from unrelated subjects (e.g., do NOT use algebra examples if the subject is about language, NLP, or Korean)
+- If the subject is "${subject}", ALL content, examples, and explanations must be about "${subject}" concepts
+- For example, if subject is "Korean-nlp-development" or "Japanese-for-tech", focus on Korean/Japanese language, NLP concepts, tech terminology, NOT algebra or math
+- Use examples and concepts that are relevant to "${subject}" specifically
+- If the topic mentions "${topic}" within "${subject}", ensure all examples relate to that specific combination
+
 CRITICAL INSTRUCTIONS - READ CAREFULLY:
 1. You MUST respond with ONLY valid, complete JSON. Do NOT use markdown code blocks (no \`\`\`json or \`\`\`).
 2. Keep ALL content EXTREMELY CONCISE. Every text field must be SHORT.
@@ -781,6 +812,13 @@ Topic: ${topic}
 Difficulty: ${difficulty}
 User Context: ${userContext}
 
+CRITICAL SUBJECT-SPECIFIC REQUIREMENTS:
+- The content MUST be directly related to "${subject}" and the topic "${topic}"
+- DO NOT use generic examples from unrelated subjects
+- If the subject is "${subject}", ALL content, examples, and explanations must be about "${subject}" concepts
+- For example, if subject is "Korean-nlp-development" or "Japanese-for-tech", focus on "${subject}"
+- Use examples and concepts that are relevant to "${subject}" specifically
+
 CRITICAL: Generate VERY CONCISE and SUMMARIZED content. Keep responses SHORT but INFORMATIVE. 
 - Limit to 2-3 sections MAXIMUM
 - Each section: 1-2 paragraphs MAXIMUM (not 2-3)
@@ -807,27 +845,80 @@ Format the response as JSON with a structure that includes visual, audio, and te
 /**
  * Generate Quiz Questions based on learning mode
  */
-export async function generateQuizQuestions(subject, topic, learningMode, difficulty, numQuestions = 5) {
+export async function generateQuizQuestions(subject, topic, learningMode, difficulty, numQuestions = 5, content = null) {
+  // Safety check: ensure learningMode is defined and has a default value
+  if (!learningMode || typeof learningMode !== 'string') {
+    learningMode = 'text'; // Default to text if undefined/null
+    console.log(`[AI Service] learningMode was undefined/null in generateQuizQuestions, defaulting to 'text'`);
+  }
+  
+  // Normalize learningMode to lowercase
+  learningMode = learningMode.toLowerCase();
+  
   const modeSpecificInstructions = {
     visual: "Include questions that can be answered using diagrams, charts, or visual reasoning. Provide visual hints.",
     audio: "Include questions that can be discussed verbally. Provide audio/verbal hints.",
     text: "Include reading comprehension and written reasoning questions. Provide detailed explanations.",
   };
 
-  const prompt = `Generate ${numQuestions} quiz questions for:
+  // Build content context from the actual generated content
+  let contentContext = "";
+  if (content) {
+    const contentParts = [];
+    
+    // Extract key information from content based on learning mode
+    if (learningMode === 'visual' && content.visualElements) {
+      contentParts.push("Visual Elements: " + JSON.stringify(content.visualElements.map((v) => v.description || v.content).slice(0, 5)));
+    }
+    if (learningMode === 'audio' && content.mainContent) {
+      contentParts.push("Audio Content: " + JSON.stringify(content.mainContent.map((m) => m.section + ": " + m.keyPoints?.join(", ")).slice(0, 5)));
+    }
+    if (learningMode === 'text' && content.sections) {
+      contentParts.push("Text Content Sections: " + JSON.stringify(content.sections.map((s) => ({
+        heading: s.heading,
+        keyConcepts: s.keyConcepts,
+        examples: s.examples?.map((e) => e.example)
+      })).slice(0, 5)));
+    }
+    
+    // Include common elements
+    if (content.summary) {
+      contentParts.push("Summary: " + content.summary);
+    }
+    if (content.practiceProblems && content.practiceProblems.length > 0) {
+      contentParts.push("Practice Problems Covered: " + content.practiceProblems.slice(0, 3).map((p) => p.problem).join("; "));
+    }
+    if (content.keyConcepts) {
+      contentParts.push("Key Concepts: " + (Array.isArray(content.keyConcepts) ? content.keyConcepts.join(", ") : content.keyConcepts));
+    }
+    
+    if (contentParts.length > 0) {
+      contentContext = `\n\nIMPORTANT: The following content was actually taught to the student. Generate questions BASED ON THIS ACTUAL CONTENT, not generic questions:\n${contentParts.join("\n\n")}\n\n`;
+    }
+  }
+
+  const prompt = `You are an expert educator creating a quiz to test understanding of specific content that was just taught.
 
 Subject: ${subject}
 Topic: ${topic}
 Difficulty: ${difficulty}
 Learning Mode: ${learningMode}
-${modeSpecificInstructions[learningMode.toLowerCase()] || ""}
+${modeSpecificInstructions[learningMode] || ""}
+${contentContext}
+CRITICAL REQUIREMENTS:
+1. Questions MUST be directly related to the "${topic}" topic within "${subject}" subject
+2. Questions MUST test understanding of the actual content that was taught (see content above)
+3. Questions should test comprehension of the specific concepts, examples, and information presented
+4. If content is provided, base questions on that exact content
+5. Questions should be relevant to ${subject} - for example, if subject is ${subject}, questions should be about ${subject} terminology
+6. Make questions specific to the topic and subject combination
 
 Format as JSON:
 {
   "questions": [
     {
       "id": 1,
-      "question": "Question text",
+      "question": "Question text (must be related to ${subject} - ${topic})",
       "type": "multiple_choice|true_false|short_answer",
       "options": ["Option A", "Option B", "Option C", "Option D"],
       "correctAnswer": "Correct answer",
@@ -840,7 +931,7 @@ Format as JSON:
 }`;
 
   return await callAI(prompt, {
-    temperature: 0.8,
+    temperature: 0.7, // Lower temperature for more focused questions
     max_tokens: 8000, // Increased for quiz questions with explanations
   });
 }
@@ -1031,6 +1122,160 @@ CRITICAL INSTRUCTIONS:
     }
     
     return defaultTopics.slice(0, numTopics);
+  }
+}
+
+/**
+ * Generate subjects using AI based on interests and category
+ */
+export async function generateSubjects(interests, category = "career", numSubjects = 10) {
+  console.log("🤖 [AI-SERVICE] generateSubjects called");
+  console.log("   - Interests:", interests);
+  console.log("   - Category:", category);
+  console.log("   - Num subjects:", numSubjects);
+  
+  const categoryInstructions = {
+    general: "Focus on traditional academic subjects like mathematics, science, history, language arts, literature, geography, and social studies.",
+    career: "Focus on professional and career-oriented subjects like programming, web development, data science, cybersecurity, digital marketing, project management, and other industry-relevant topics.",
+  };
+
+  const prompt = `You are an expert curriculum designer. Generate EXACTLY ${numSubjects} learning subjects for the "${category}" category based on user interests: "${interests}".
+
+${categoryInstructions[category.toLowerCase()] || categoryInstructions.career}
+
+Requirements:
+- Generate EXACTLY ${numSubjects} subjects (no more, no less) - this is mandatory
+- Subjects should be relevant to the user's interests
+- Each subject should be specific and actionable
+- Mix of different difficulty levels and specializations
+- Keep descriptions concise (1-2 sentences, 20-40 words max) to ensure complete JSON response
+
+Format as JSON:
+{
+  "subjects": [
+    {
+      "name": "Subject Name",
+      "description": "Brief description (1-2 sentences, 20-40 words max)",
+      "icon": "icon-name",
+      "colors": ["#color1", "#color2"]
+    }
+  ]
+}
+
+CRITICAL INSTRUCTIONS:
+1. You MUST respond with ONLY valid, complete JSON. Do NOT use markdown code blocks (no \`\`\`json or \`\`\`).
+2. Start with { and end with }. Return ONLY the JSON object, nothing else.
+3. Generate EXACTLY ${numSubjects} subjects - this is mandatory and critical.
+4. Subject names should be concise (2-4 words max).
+5. Descriptions MUST be brief (1-2 sentences, 20-40 words max) to ensure the complete JSON fits within token limits.
+6. Use appropriate MaterialCommunityIcons icon names (e.g., "code-tags", "web", "chart-line", "shield-lock", "book-open-variant", "calculator-variant", "atom", "scroll").
+7. Use attractive color combinations in hex format (e.g., ["#3B82F6", "#1E40AF"]).
+8. Ensure the JSON is complete and properly closed - do not truncate the response.`;
+
+  try {
+    console.log("📤 [AI-SERVICE] Calling AI with prompt...");
+    // Increase max_tokens to ensure we get complete responses for 10 subjects
+    // Each subject needs ~150-200 tokens (name, description, icon, colors)
+    // 10 subjects = ~2000 tokens, plus JSON structure = ~2500-3000 tokens minimum
+    // Using 4000 to ensure we get complete responses even with longer descriptions
+    const response = await callAI(prompt, {
+      temperature: 0.8,
+      max_tokens: 4000, // Increased from 2000 to ensure complete responses for 10 subjects
+    });
+
+    console.log("📥 [AI-SERVICE] AI response received");
+    console.log("   - Response type:", typeof response);
+    console.log("   - Response length:", typeof response === 'string' ? response.length : 'N/A');
+
+    // Parse the response
+    let jsonData;
+    if (typeof response === 'string') {
+      let jsonContent = response.trim();
+      console.log("   - Raw response (first 200 chars):", jsonContent.substring(0, 200));
+      
+      jsonContent = jsonContent.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+      const jsonMatch = jsonContent.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        jsonContent = jsonMatch[0];
+      }
+      
+      try {
+        jsonData = JSON.parse(jsonContent);
+        console.log("✅ [AI-SERVICE] Successfully parsed JSON response");
+      } catch (parseError) {
+        console.error("❌ [AI-SERVICE] JSON parse error:", parseError.message);
+        console.error("   - JSON content (first 500 chars):", jsonContent.substring(0, 500));
+        throw new Error(`Failed to parse AI response as JSON: ${parseError.message}`);
+      }
+    } else {
+      jsonData = response;
+      console.log("✅ [AI-SERVICE] Response is already an object");
+    }
+
+    // Ensure we have subjects array
+    if (!jsonData.subjects || !Array.isArray(jsonData.subjects)) {
+      console.error("❌ [AI-SERVICE] Invalid response structure:");
+      console.error("   - jsonData keys:", Object.keys(jsonData || {}));
+      console.error("   - subjects exists:", !!jsonData.subjects);
+      console.error("   - subjects is array:", Array.isArray(jsonData.subjects));
+      throw new Error('Invalid response format: subjects array not found');
+    }
+
+    console.log(`✅ [AI-SERVICE] Found ${jsonData.subjects.length} subjects in response`);
+    
+    // Validate we got the expected number of subjects
+    if (jsonData.subjects.length < numSubjects) {
+      console.warn(`⚠️ [AI-SERVICE] Received only ${jsonData.subjects.length} subjects, expected ${numSubjects}`);
+      console.warn("   - This may indicate the response was truncated");
+      // Continue with what we have, but log the issue
+    } else if (jsonData.subjects.length > numSubjects) {
+      console.warn(`⚠️ [AI-SERVICE] Received ${jsonData.subjects.length} subjects, expected ${numSubjects}. Truncating to ${numSubjects}.`);
+    }
+
+    // Validate and format subjects - normalize names to lowercase with hyphens
+    console.log("🔄 [AI-SERVICE] Formatting and normalizing subjects...");
+    const formattedSubjects = jsonData.subjects.map((subject, index) => {
+      const rawName = subject.name || `Subject ${index + 1}`;
+      // Normalize name: lowercase, replace spaces with hyphens, and remove extra characters
+      // This matches the format used in the database (e.g., "web-development", "data-science")
+      const normalizedName = rawName
+        .toLowerCase()
+        .trim()
+        .replace(/\s+/g, '-')  // Replace spaces with hyphens
+        .replace(/[^a-z0-9-]/g, '')  // Remove special characters except hyphens
+        .replace(/-+/g, '-')  // Replace multiple hyphens with single hyphen
+        .replace(/^-|-$/g, '');  // Remove leading/trailing hyphens
+      
+      console.log(`   - Subject ${index + 1}: "${rawName}" -> "${normalizedName}"`);
+      
+      return {
+        name: normalizedName,
+        description: subject.description || `Learn about ${rawName}`,
+        icon: subject.icon || 'book-open-variant',
+        colors: subject.colors || (index % 2 === 0 ? ["#3B82F6", "#1E40AF"] : ["#10B981", "#059669"]),
+      };
+    });
+
+    const finalSubjects = formattedSubjects.slice(0, numSubjects);
+    console.log(`✅ [AI-SERVICE] Returning ${finalSubjects.length} formatted subjects`);
+    console.log("   - Subject names:", finalSubjects.map(s => s.name).join(", "));
+    
+    // Final validation - ensure we have at least the requested number
+    if (finalSubjects.length < numSubjects) {
+      console.error(`❌ [AI-SERVICE] Only got ${finalSubjects.length} subjects, expected ${numSubjects}`);
+      throw new Error(`Incomplete response: Only received ${finalSubjects.length} subjects instead of ${numSubjects}. The AI response may have been truncated.`);
+    }
+    
+    return finalSubjects;
+  } catch (error) {
+    console.error('❌ [AI-SERVICE] Error generating subjects:');
+    console.error("   - Error type:", error?.constructor?.name || typeof error);
+    console.error("   - Error message:", error?.message);
+    console.error("   - Error stack:", error?.stack);
+    
+    // Don't return fallback subjects - throw error instead
+    console.error("❌ [AI-SERVICE] Throwing error - no fallback subjects will be returned");
+    throw error;
   }
 }
 
@@ -1227,7 +1472,7 @@ async function callGoogleAI(prompt, options = {}) {
           imageSize: '1K',
         },
         temperature: options.temperature || 0.7,
-        maxOutputTokens: options.max_tokens || 3500, // Limited to prevent truncation - prioritize complete JSON
+        maxOutputTokens: options.max_tokens || 4000, // Increased default to 4000 to ensure complete responses for 10 subjects
         responseMimeType: 'application/json', // Request JSON response
       };
       

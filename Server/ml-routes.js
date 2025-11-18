@@ -165,6 +165,32 @@ router.post("/adaptive-difficulty", async (req, res) => {
   }
 });
 
+/**
+ * GET /api/ml/analytics
+ * Get comprehensive analytics data for the analytics dashboard
+ * Aggregates mode recommendations, engagement, quiz history, and subject performance
+ */
+router.get("/analytics", async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { subject } = req.query;
+
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const analytics = await mlServices.getComprehensiveAnalytics(userId, subject);
+
+    res.json({
+      success: true,
+      analytics: analytics,
+    });
+  } catch (error) {
+    console.error("Error in analytics:", error);
+    res.status(500).json({ error: "Failed to fetch analytics data" });
+  }
+});
+
 export default router;
 
 

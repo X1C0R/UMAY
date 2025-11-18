@@ -14,6 +14,7 @@ import * as aiServices from "./ai-content-service.js";
 import topicsRoutes, { initializeTopicsRoutes } from "./topics-routes.js";
 import quizRoutes, { initializeQuizRoutes } from "./quiz-routes.js";
 import learningTypesRoutes, { initializeLearningTypesRoutes } from "./learning-types-routes.js";
+import subjectsRoutes, { initializeSubjectsRoutes } from "./subjects-routes.js";
 dotenv.config();
 import genAI from './geminiClient.js';
 
@@ -58,6 +59,9 @@ initializeQuizRoutes(supabase);
 
 // Initialize Learning Types Routes
 initializeLearningTypesRoutes(supabase);
+
+// Initialize Subjects Routes
+initializeSubjectsRoutes(supabase);
 
 // Initialize AI Services
 // Supports: 'openai', 'anthropic', 'google', 'ollama'
@@ -383,16 +387,23 @@ app.post("/activity", authenticateToken, async (req, res) => {
       session_date,
     } = req.body;
 
+    // Normalize subject name to match subjects table format (lowercase with hyphens)
+    // This ensures consistency with the subjects system (e.g., "Web Development" -> "web-development")
+    const normalizedSubject = subject
+      ? subject.toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').replace(/-+/g, '-').replace(/^-|-$/g, '')
+      : null;
+
     // Log received data for validation
     console.log("📥 Received activity log data:");
     console.log(`   User ID: ${userId}`);
-    console.log(`   Subject: ${subject}`);
+    console.log(`   Subject (original): ${subject}`);
+    console.log(`   Subject (normalized): ${normalizedSubject}`);
     console.log(`   Activity Type: ${activity_type}`);
     console.log(`   Reading Time: ${reading_time || 0}s`);
     console.log(`   Playback Time: ${playback_time || 0}`);
     console.log(`   Quiz Score: ${quiz_score || 'N/A'}%`);
 
-    if (!subject || !activity_type) {
+    if (!normalizedSubject || !activity_type) {
       console.error("❌ Validation failed: Missing subject or activity_type");
       return res.status(400).json({
         error: "Subject and activity_type are required.",
@@ -400,11 +411,12 @@ app.post("/activity", authenticateToken, async (req, res) => {
     }
 
     // Check if record already exists for this user, subject, and activity_type
+    // Use normalized subject for consistency
     const { data: existingRecord, error: selectError } = await supabase
       .from("activity_logs")
       .select("id, reading_time, playback_time, quiz_score, focus_level")
       .eq("user_id", userId)
-      .eq("subject", subject)
+      .eq("subject", normalizedSubject)
       .eq("activity_type", activity_type)
       .maybeSingle();
 
@@ -429,10 +441,12 @@ app.post("/activity", authenticateToken, async (req, res) => {
       const updatedPlaybackTime = (existingRecord.playback_time || 0) + (playback_time || 0);
       
       // Update quiz_score and focus_level if provided (use latest values)
+      // Also update subject to normalized format for consistency
       const updateData = {
         reading_time: updatedReadingTime,
         playback_time: updatedPlaybackTime,
         session_date: session_date || new Date().toISOString(),
+        subject: normalizedSubject, // Ensure subject is in normalized format
       };
       
       // Only update quiz_score and focus_level if new values are provided
@@ -473,7 +487,7 @@ app.post("/activity", authenticateToken, async (req, res) => {
       console.log(`   No existing record found, creating new...`);
       const activityData = {
         user_id: userId,
-        subject,
+        subject: normalizedSubject, // Use normalized subject name
         activity_type,
         quiz_score: quiz_score || null,
         focus_level: focus_level || null,
@@ -933,6 +947,7 @@ app.use("/api/ai", authenticateToken, aiRoutes);
 app.use("/api/topics", authenticateToken, topicsRoutes);
 app.use("/api/quiz", authenticateToken, quizRoutes);
 app.use("/api/learning-types", authenticateToken, learningTypesRoutes);
+app.use("/api/subjects", authenticateToken, subjectsRoutes);
 
 // START SERVER
 const PORT = process.env.PORT || 4000;

@@ -44,6 +44,9 @@ router.get("/check", async (req, res) => {
 
     for (const learningType of learningTypes) {
       // Query activity_logs for this learning type
+      // A learning type is considered completed if there's any activity_log entry
+      // with activity_type matching the learning type (regardless of quiz_score)
+      // This matches the UI logic which shows completion based on totalSessions > 0
       // Note: We use lowercase comparison for subject to handle case variations
       const { data: activities, error } = await supabaseClient
         .from("activity_logs")
@@ -51,8 +54,6 @@ router.get("/check", async (req, res) => {
         .eq("user_id", userId)
         .eq("subject", normalizedSubject) // Exact match (already normalized to lowercase)
         .eq("activity_type", learningType.toLowerCase())
-        .not("quiz_score", "is", null)
-        .gt("quiz_score", 0)
         .limit(1);
 
       if (error) {
@@ -62,7 +63,8 @@ router.get("/check", async (req, res) => {
 
       if (activities && activities.length > 0) {
         completedTypes.push(learningType);
-        console.log(`✅ Found completed ${learningType} learning type (quiz_score: ${activities[0].quiz_score})`);
+        const score = activities[0].quiz_score || 0;
+        console.log(`✅ Found completed ${learningType} learning type (quiz_score: ${score})`);
       } else {
         console.log(`❌ No completed ${learningType} learning type found`);
       }

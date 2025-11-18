@@ -17,10 +17,16 @@ const router = express.Router();
 router.post("/generate-content", async (req, res) => {
   try {
     const userId = req.userId;
-    const { subject, topic, difficulty } = req.body;
+    let { subject, topic, difficulty } = req.body;
 
     if (!userId) {
       return res.status(401).json({ error: "Authentication required" });
+    }
+
+    // Fallback: if topic is null/undefined, use subject as topic
+    if (!topic && subject) {
+      topic = subject;
+      console.log(`[AI Routes] Topic was null/undefined, using subject as topic: ${subject}`);
     }
 
     if (!subject || !topic) {
@@ -91,10 +97,16 @@ router.post("/generate-content", async (req, res) => {
 router.post("/generate-content-for-mode", async (req, res) => {
   try {
     const userId = req.userId;
-    const { subject, topic, learningMode, difficulty } = req.body;
+    let { subject, topic, learningMode, difficulty } = req.body;
 
     if (!userId) {
       return res.status(401).json({ error: "Authentication required" });
+    }
+
+    // Fallback: if topic is null/undefined, use subject as topic
+    if (!topic && subject) {
+      topic = subject;
+      console.log(`[AI Routes] Topic was null/undefined, using subject as topic: ${subject}`);
     }
 
     if (!subject || !topic || !learningMode) {
@@ -162,10 +174,16 @@ router.post("/generate-content-for-mode", async (req, res) => {
 router.post("/generate-quiz", async (req, res) => {
   try {
     const userId = req.userId;
-    const { subject, topic, learningMode, difficulty, numQuestions } = req.body;
+    let { subject, topic, learningMode, difficulty, numQuestions, content } = req.body;
 
     if (!userId) {
       return res.status(401).json({ error: "Authentication required" });
+    }
+
+    // Fallback: if topic is null/undefined, use subject as topic
+    if (!topic && subject) {
+      topic = subject;
+      console.log(`[AI Routes] Topic was null/undefined, using subject as topic: ${subject}`);
     }
 
     if (!subject || !topic) {
@@ -179,12 +197,33 @@ router.post("/generate-quiz", async (req, res) => {
       mode = mlRecommendation.recommendedMode || "visual";
     }
 
+    // If content is provided, use it to generate context-aware questions
+    // Otherwise, try to fetch the most recent content for this topic
+    let contentToUse = content;
+    if (!contentToUse) {
+      try {
+        // Try to get the most recent generated content for this topic
+        const generatedContent = await aiService.generatePersonalizedContent(
+          userId,
+          subject,
+          topic,
+          mode,
+          difficulty || "medium"
+        );
+        contentToUse = generatedContent;
+      } catch (contentError) {
+        console.warn("Could not fetch content for quiz context, generating without it:", contentError.message);
+        // Continue without content - will use generic prompt
+      }
+    }
+
     const quiz = await aiService.generateQuizQuestions(
       subject,
       topic,
       mode,
       difficulty || "medium",
-      numQuestions || 5
+      numQuestions || 5,
+      contentToUse // Pass content to quiz generation
     );
 
     res.json({

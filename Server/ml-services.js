@@ -295,7 +295,7 @@ export async function optimizeLearningPath(userId, subject) {
 
     return {
       recommendation: avgScore > 70 ? "advanced" : avgScore > 50 ? "intermediate" : "beginner",
-      nextTopics: generateTopicSuggestions(subject, difficulty),
+      nextTopics: [], // Topics are now generated dynamically based on the actual subject from database
       difficulty: difficulty,
       avgScore: avgScore,
       trend: trend,
@@ -304,28 +304,10 @@ export async function optimizeLearningPath(userId, subject) {
     console.error("Error in optimizeLearningPath:", error);
     return {
       recommendation: "beginner",
-      nextTopics: [],
+      nextTopics: [], // Topics are now generated dynamically based on the actual subject from database
       difficulty: "medium",
     };
   }
-}
-
-function generateTopicSuggestions(subject, difficulty) {
-  // This would typically come from a knowledge graph or curriculum database
-  const topicMap = {
-    math: {
-      easy: ["Basic Arithmetic", "Number Patterns", "Simple Geometry"],
-      medium: ["Algebra Basics", "Fractions", "Decimals"],
-      hard: ["Calculus", "Linear Algebra", "Statistics"],
-    },
-    science: {
-      easy: ["Basic Biology", "Simple Physics", "Chemistry Basics"],
-      medium: ["Cell Biology", "Mechanics", "Organic Chemistry"],
-      hard: ["Genetics", "Quantum Physics", "Biochemistry"],
-    },
-  };
-
-  return topicMap[subject?.toLowerCase()]?.[difficulty] || [];
 }
 
 /**
@@ -554,5 +536,395 @@ export function calculateAdaptiveDifficulty(recentScores, currentDifficulty = "m
   } else {
     return "medium";
   }
+}
+
+/**
+ * 7. COMPREHENSIVE ANALYTICS
+ * Aggregates all analytics data for the analytics dashboard
+ */
+export async function getComprehensiveAnalytics(userId, subject) {
+  try {
+    // Fetch all data in parallel for better performance
+    const [modeRecommendation, engagement, quizResults] = await Promise.all([
+      recommendLearningMode(userId, subject),
+      analyzeEngagement(userId, 30), // Last 30 days
+      getQuizHistoryForAnalytics(userId, subject),
+    ]);
+
+    // Process quiz scores by learning type
+    const quizScoresByType = {
+      visual: [],
+      audio: [],
+      text: [],
+    };
+
+    if (quizResults && quizResults.length > 0) {
+      quizResults.forEach((quiz) => {
+        const learningType = (quiz.learning_type || quiz.learningType || 'visual').toLowerCase();
+        if (learningType === 'visual' || learningType === 'audio' || learningType === 'text') {
+          const score = parseFloat(quiz.score) || 0;
+          quizScoresByType[learningType].push([score, 100]); // Score is already a percentage
+        }
+      });
+    }
+
+    // If no quiz data, use mode stats to generate data points
+    if (quizScoresByType.visual.length === 0 && 
+        quizScoresByType.audio.length === 0 && 
+        quizScoresByType.text.length === 0) {
+      const modeStats = modeRecommendation.modeStats;
+      if (modeStats) {
+        if (modeStats.visual && modeStats.visual.totalSessions > 0) {
+          const avgScore = modeStats.visual.totalScore / modeStats.visual.totalSessions;
+          quizScoresByType.visual = Array(Math.min(modeStats.visual.totalSessions, 10))
+            .fill([avgScore, 100]);
+        }
+        if (modeStats.audio && modeStats.audio.totalSessions > 0) {
+          const avgScore = modeStats.audio.totalScore / modeStats.audio.totalSessions;
+          quizScoresByType.audio = Array(Math.min(modeStats.audio.totalSessions, 10))
+            .fill([avgScore, 100]);
+        }
+        if (modeStats.text && modeStats.text.totalSessions > 0) {
+          const avgScore = modeStats.text.totalScore / modeStats.text.totalSessions;
+          quizScoresByType.text = Array(Math.min(modeStats.text.totalSessions, 10))
+            .fill([avgScore, 100]);
+        }
+      }
+    }
+
+    // Calculate subject performance
+    const subjectMap = new Map();
+    if (quizResults && quizResults.length > 0) {
+      quizResults.forEach((quiz) => {
+        const subj = quiz.subject || 'General';
+        const score = parseFloat(quiz.score) || 0;
+        
+        if (!subjectMap.has(subj)) {
+          subjectMap.set(subj, { total: 0, count: 0 });
+        }
+        const current = subjectMap.get(subj);
+        current.total += score;
+        current.count += 1;
+      });
+    }
+
+    const subjectPerformance = [];
+    const colors = ["#38BDF8", "#A855F7", "#F97316", "#22C55E", "#EF4444", "#F59E0B"];
+    let colorIndex = 0;
+    let totalAll = 0;
+    let countAll = 0;
+
+    subjectMap.forEach((value, subj) => {
+      const avg = Math.round(value.total / value.count);
+      subjectPerformance.push({
+        label: subj.charAt(0).toUpperCase() + subj.slice(1),
+        percent: avg,
+        color: colors[colorIndex % colors.length],
+      });
+      totalAll += value.total;
+      countAll += value.count;
+      colorIndex++;
+    });
+
+    // Sort by performance (highest first)
+    subjectPerformance.sort((a, b) => b.percent - a.percent);
+
+    // Calculate overall average
+    const overallPercent = countAll > 0 ? Math.round(totalAll / countAll) : 0;
+
+    // Prepare analytics data for AI suggestions
+    const analyticsDataForAI = {
+      quizScores: quizScoresByType,
+      subjectPerformance,
+      overallPercent,
+      modeRecommendation,
+      engagement,
+    };
+
+    // Generate AI-powered improvement suggestions (async, don't block)
+    let improvementSuggestions = [];
+    try {
+      improvementSuggestions = await generateImprovementSuggestions(userId, analyticsDataForAI);
+    } catch (suggestionError) {
+      console.warn('Failed to generate AI suggestions, using defaults:', suggestionError.message);
+      improvementSuggestions = generateDefaultSuggestions(analyticsDataForAI);
+    }
+
+    return {
+      quizScores: quizScoresByType,
+      subjectPerformance,
+      overallPercent,
+      modeRecommendation,
+      engagement,
+      improvementSuggestions,
+      lastUpdate: new Date().toISOString(),
+    };
+  } catch (error) {
+    console.error("Error in getComprehensiveAnalytics:", error);
+    throw error;
+  }
+}
+
+/**
+ * Helper function to get quiz history for analytics
+ */
+async function getQuizHistoryForAnalytics(userId, subject, limit = 50) {
+  try {
+    let query = supabaseClient
+      .from("quiz_results")
+      .select("*")
+      .eq("user_id", userId)
+      .order("completed_at", { ascending: false })
+      .limit(limit);
+
+    if (subject) {
+      query = query.eq("subject", subject);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.warn("Error fetching quiz history for analytics:", error);
+      return [];
+    }
+
+    return data || [];
+  } catch (error) {
+    console.error("Error in getQuizHistoryForAnalytics:", error);
+    return [];
+  }
+}
+
+/**
+ * 8. AI-POWERED IMPROVEMENT SUGGESTIONS
+ * Generates personalized improvement suggestions based on ML analytics data
+ */
+export async function generateImprovementSuggestions(userId, analyticsData) {
+  try {
+    const { modeRecommendation, engagement, quizScores, subjectPerformance, overallPercent } = analyticsData;
+
+    // Build context from analytics data
+    const context = {
+      recommendedMode: modeRecommendation?.recommendedMode || 'visual',
+      confidence: modeRecommendation?.confidence || 0,
+      engagementScore: engagement?.engagementScore || 0,
+      engagementStatus: engagement?.status || 'low',
+      engagementTrend: engagement?.trend || 'stable',
+      avgFocus: engagement?.avgFocus || 0,
+      avgScore: engagement?.avgScore || 0,
+      overallPercent: overallPercent || 0,
+      modeStats: modeRecommendation?.modeStats || {},
+      subjectPerformance: subjectPerformance || [],
+      alerts: engagement?.alerts || [],
+      recommendations: engagement?.recommendations || [],
+    };
+
+    // Create prompt for AI (same format as topics generation)
+    const prompt = `You are an expert learning coach analyzing a student's learning analytics data. Based on the following data, provide 3-5 specific, actionable improvement suggestions.
+
+Learning Analytics Data:
+- Recommended Learning Mode: ${context.recommendedMode} (confidence: ${(context.confidence * 100).toFixed(0)}%)
+- Overall Performance: ${context.overallPercent}%
+- Engagement Score: ${context.engagementScore}% (Status: ${context.engagementStatus}, Trend: ${context.engagementTrend})
+- Average Focus Level: ${context.avgFocus}%
+- Average Quiz Score: ${context.avgScore}%
+
+Mode Performance:
+${Object.entries(context.modeStats).map(([mode, stats]) => 
+  `- ${mode}: ${stats.totalSessions || 0} sessions, avg score: ${stats.totalScore && stats.totalSessions ? Math.round(stats.totalScore / stats.totalSessions) : 0}%, avg focus: ${stats.avgFocus || 0}%`
+).join('\n')}
+
+Subject Performance:
+${context.subjectPerformance.map(subj => `- ${subj.label}: ${subj.percent}%`).join('\n') || 'No subject data available'}
+
+Current Alerts: ${context.alerts.length > 0 ? context.alerts.join('; ') : 'None'}
+Current Recommendations: ${context.recommendations.length > 0 ? context.recommendations.join('; ') : 'None'}
+
+Format as JSON:
+{
+  "suggestions": [
+    "Suggestion 1 text (1-2 sentences, specific and actionable)",
+    "Suggestion 2 text (1-2 sentences, specific and actionable)",
+    "Suggestion 3 text (1-2 sentences, specific and actionable)"
+  ]
+}
+
+CRITICAL INSTRUCTIONS:
+1. You MUST respond with ONLY valid, complete JSON. Do NOT use markdown code blocks (no \`\`\`json or \`\`\`).
+2. Start with { and end with }. Return ONLY the JSON object, nothing else.
+3. Provide 3-5 specific, actionable improvement suggestions
+4. Each suggestion should be concise (1-2 sentences max, 20-40 words)
+5. Focus on the weakest areas identified in the data
+6. Be encouraging and constructive
+7. Prioritize suggestions that address the most critical issues`;
+
+    try {
+      // Use the same callAI function as topics generation
+      const aiService = await import('./ai-content-service.js');
+      
+      // Access the internal callAI function (it's not exported, so we need to use generateTopics pattern)
+      // Instead, we'll use a helper that mimics the callAI pattern
+      const response = await callAIForSuggestions(prompt, {
+        temperature: 0.8,
+        max_tokens: 1500,
+      });
+
+      // Parse the response (same format as topics)
+      let jsonData;
+      if (typeof response === 'string') {
+        // Try to parse JSON from string
+        let jsonContent = response.trim();
+        
+        // Remove markdown code blocks if present
+        jsonContent = jsonContent.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+        
+        // Find JSON object
+        const jsonMatch = jsonContent.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          jsonContent = jsonMatch[0];
+        }
+        
+        jsonData = JSON.parse(jsonContent);
+      } else {
+        jsonData = response;
+      }
+
+      // Ensure we have suggestions array
+      if (jsonData.suggestions && Array.isArray(jsonData.suggestions)) {
+        return jsonData.suggestions.slice(0, 5);
+      } else if (Array.isArray(jsonData)) {
+        // Handle case where AI returns array directly
+        return jsonData.slice(0, 5);
+      } else {
+        throw new Error('Invalid response format: suggestions array not found');
+      }
+    } catch (aiError) {
+      console.warn('AI suggestion generation failed, using defaults:', aiError.message);
+      return generateDefaultSuggestions(analyticsData);
+    }
+  } catch (error) {
+    console.error("Error generating improvement suggestions:", error);
+    return generateDefaultSuggestions(analyticsData);
+  }
+}
+
+/**
+ * Helper function to call AI (similar to callAI in ai-content-service.js)
+ * This uses the same pattern as topics generation
+ */
+async function callAIForSuggestions(prompt, options = {}) {
+  // Import AI service to access the callAI function
+  // Since callAI is not exported, we'll recreate the pattern
+  const aiService = await import('./ai-content-service.js');
+  
+  // Check if we can access the internal callAI
+  // If not, we'll use the geminiClient directly with the same pattern
+  try {
+    // Try to use the AI service's internal method
+    // Since we can't access callAI directly, we'll use the geminiClient pattern
+    const genAI = (await import('./geminiClient.js')).default;
+    if (!genAI) {
+      throw new Error("AI not configured");
+    }
+
+    // Use the same pattern as callGoogleAI in ai-content-service.js
+    const googleAI = new (await import('@google/genai')).GoogleGenAI({
+      apiKey: process.env.GOOGLE_AI_API_KEY,
+    });
+
+    const modelName = 'gemini-2.0-flash-exp';
+    const enhancedPrompt = prompt + '\n\nCRITICAL INSTRUCTIONS:\n1. You MUST respond with ONLY valid, complete JSON. Do NOT use markdown code blocks (no ```json or ```).\n2. Start with { and end with }. Return ONLY the JSON object, nothing else.';
+
+    const config = {
+      temperature: options.temperature || 0.8,
+      maxOutputTokens: options.max_tokens || 1500,
+      responseMimeType: 'application/json', // Request JSON response
+    };
+
+    const contents = [{
+      role: 'user',
+      parts: [{ text: enhancedPrompt }],
+    }];
+
+    // Use non-streaming for more reliable JSON parsing
+    const response = await googleAI.models.generateContent({
+      model: modelName,
+      config: config,
+      contents: contents,
+    });
+
+    // Extract text from response
+    let content = '';
+    if (response.text) {
+      content = response.text;
+    } else if (response.candidates?.[0]?.content?.parts?.[0]?.text) {
+      content = response.candidates[0].content.parts[0].text;
+    } else if (typeof response === 'string') {
+      content = response;
+    }
+
+    if (!content) {
+      throw new Error('Empty response from AI');
+    }
+
+    return content;
+  } catch (error) {
+    console.error('Error calling AI for suggestions:', error);
+    throw error;
+  }
+}
+
+/**
+ * Generate default suggestions based on analytics data (fallback when AI is unavailable)
+ */
+function generateDefaultSuggestions(analyticsData) {
+  const suggestions = [];
+  const { modeRecommendation, engagement, overallPercent, subjectPerformance } = analyticsData;
+
+  // Performance-based suggestions
+  if (overallPercent < 60) {
+    suggestions.push("Your overall performance is below average. Consider reviewing previous topics and focusing on fundamentals before moving to advanced concepts.");
+  } else if (overallPercent < 80) {
+    suggestions.push("You're making good progress! To improve further, try practicing more frequently and focusing on areas where you scored lower.");
+  }
+
+  // Engagement-based suggestions
+  if (engagement?.engagementScore < 50) {
+    suggestions.push("Your engagement level is low. Try setting specific learning goals and taking regular breaks to maintain focus.");
+  }
+
+  if (engagement?.avgFocus < 60) {
+    suggestions.push("Your focus level could be improved. Consider studying in a quiet environment and eliminating distractions during learning sessions.");
+  }
+
+  // Mode-based suggestions
+  if (modeRecommendation?.recommendedMode) {
+    const recommendedMode = modeRecommendation.recommendedMode;
+    const modeStats = modeRecommendation.modeStats?.[recommendedMode];
+    
+    if (modeStats && modeStats.totalSessions < 5) {
+      suggestions.push(`Try more ${recommendedMode} learning sessions. Based on your performance, this learning style shows promise for you.`);
+    }
+  }
+
+  // Subject-based suggestions
+  if (subjectPerformance && subjectPerformance.length > 0) {
+    const weakestSubject = subjectPerformance[subjectPerformance.length - 1];
+    if (weakestSubject.percent < 70) {
+      suggestions.push(`Focus more on ${weakestSubject.label}. Your performance in this subject is lower than others, so additional practice would be beneficial.`);
+    }
+  }
+
+  // Trend-based suggestions
+  if (engagement?.trend === 'declining') {
+    suggestions.push("Your engagement trend is declining. Consider switching learning modes or taking a short break to recharge.");
+  }
+
+  // Default suggestion if none generated
+  if (suggestions.length === 0) {
+    suggestions.push("Keep up the great work! Continue practicing regularly to maintain and improve your performance.");
+  }
+
+  return suggestions.slice(0, 5); // Limit to 5 suggestions
 }
 
