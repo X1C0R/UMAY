@@ -35,9 +35,10 @@ router.get("/check", async (req, res) => {
 
     // Check for quiz results in activity_logs for each learning type
     // A learning type is considered completed if there's an activity_log entry
-    // with activity_type = 'visual'/'audio'/'text' and quiz_score > 0
+    // with activity_type = 'visual'/'audio'/'text' (regardless of quiz_score)
     const learningTypes = ['visual', 'audio', 'text'];
     const completedTypes = [];
+    const typeScores = {};
     const normalizedSubject = subject.toLowerCase().trim();
 
     console.log(`Checking learning types completion for user ${userId}, subject: "${normalizedSubject}"`);
@@ -54,6 +55,7 @@ router.get("/check", async (req, res) => {
         .eq("user_id", userId)
         .eq("subject", normalizedSubject) // Exact match (already normalized to lowercase)
         .eq("activity_type", learningType.toLowerCase())
+        .order("session_date", { ascending: false })
         .limit(1);
 
       if (error) {
@@ -63,7 +65,8 @@ router.get("/check", async (req, res) => {
 
       if (activities && activities.length > 0) {
         completedTypes.push(learningType);
-        const score = activities[0].quiz_score || 0;
+        const score = parseFloat(activities[0].quiz_score) || 0;
+        typeScores[learningType] = score;
         console.log(`✅ Found completed ${learningType} learning type (quiz_score: ${score})`);
       } else {
         console.log(`❌ No completed ${learningType} learning type found`);
@@ -71,16 +74,23 @@ router.get("/check", async (req, res) => {
     }
 
     const allCompleted = completedTypes.length === 3;
+    // Check if all completed types have 0 scores
+    const allScoresZero = allCompleted && completedTypes.every(type => (typeScores[type] || 0) === 0);
+    
     console.log(`📊 Learning types check result: ${completedTypes.length}/3 completed for subject "${normalizedSubject}"`);
     console.log(`   Completed types: [${completedTypes.join(', ')}]`);
+    console.log(`   Type scores:`, typeScores);
     console.log(`   All completed: ${allCompleted}`);
+    console.log(`   All scores zero: ${allScoresZero}`);
 
     res.json({
       success: true,
-      completed: allCompleted,
+      completed: allCompleted && !allScoresZero, // Only true if all completed AND at least one has score > 0
       completedTypes: completedTypes,
       totalCompleted: completedTypes.length,
       totalRequired: 3,
+      allScoresZero: allScoresZero, // Flag to indicate all scores are 0
+      typeScores: typeScores, // Include scores for frontend display
     });
   } catch (error) {
     console.error("Error checking learning types:", error);
