@@ -141,57 +141,60 @@ router.post("/user", async (req, res) => {
     // Convert subject IDs (which are normalized names like "math", "web-development") to UUIDs
     // Frontend sends IDs like "math", "web-development" (lowercase with hyphens)
     // Database now stores names normalized with hyphens (e.g., "web-development")
-    // But we also handle legacy data that might have spaces
+    // But we also handle legacy data that might have spaces or different casing
     const normalizedIds = subjectIds.map(id => id.toLowerCase().trim());
     
-    // Find subjects by name - try exact match first (with hyphens, which is the new format)
-    const { data: existingSubjects, error: checkError } = await supabaseClient
+    // Find subjects by name using case-insensitive matching
+    // We need to handle both exact matches and case variations
+    // Strategy: Get all active subjects and filter in JavaScript for case-insensitive matching
+    // This handles both exact matches and variations (spaces, hyphens, casing)
+    const { data: allActiveSubjects, error: fetchError } = await supabaseClient
       .from("subjects")
       .select("id, name")
-      .in("name", normalizedIds)
       .eq("is_active", true);
 
-    if (checkError) throw checkError;
+    if (fetchError) throw fetchError;
     
-    // If not all found, try alternative formats (with spaces for legacy data)
-    if (existingSubjects && existingSubjects.length < subjectIds.length) {
-      const foundIds = new Set(existingSubjects.map(s => s.id));
-      const foundNames = new Set(existingSubjects.map(s => s.name.toLowerCase()));
+    // Match subjects case-insensitively and handle different formats
+    // Normalize both database names and search IDs to a common format for comparison
+    const normalizeForComparison = (str) => {
+      return str.toLowerCase().trim().replace(/[\s-]+/g, '-');
+    };
+    
+    const existingSubjects = [];
+    const foundSubjectIds = new Set();
+    
+    for (const searchId of normalizedIds) {
+      const normalizedSearchId = normalizeForComparison(searchId);
       
-      // Try alternative name formats for missing subjects (legacy format with spaces)
-      const missingIds = subjectIds.filter(id => {
-        const normalized = id.toLowerCase().trim();
-        return !foundNames.has(normalized);
+      // Try to find a match with different variations
+      const matchedSubject = allActiveSubjects.find(subject => {
+        // Skip if already found
+        if (foundSubjectIds.has(subject.id)) return false;
+        
+        const normalizedSubjectName = normalizeForComparison(subject.name);
+        return normalizedSubjectName === normalizedSearchId;
       });
       
-      if (missingIds.length > 0) {
-        // Try with spaces (legacy format)
-        const alternativeIds = missingIds.flatMap(id => [
-          id.toLowerCase().replace(/-/g, ' ').trim(), // "web-development" -> "web development"
-          id.toLowerCase().trim(), // Already tried, but include for completeness
-        ]);
-        
-        const { data: altSubjects, error: altError } = await supabaseClient
-          .from("subjects")
-          .select("id, name")
-          .in("name", alternativeIds)
-          .eq("is_active", true);
-        
-        if (!altError && altSubjects) {
-          // Add subjects that weren't already found
-          altSubjects.forEach(subject => {
-            if (!foundIds.has(subject.id)) {
-              existingSubjects.push(subject);
-              foundIds.add(subject.id);
-            }
-          });
-        }
+      if (matchedSubject) {
+        existingSubjects.push(matchedSubject);
+        foundSubjectIds.add(matchedSubject.id);
       }
     }
 
     if (existingSubjects.length !== subjectIds.length) {
+      const foundNames = existingSubjects.map(s => s.name);
+      const foundNormalized = new Set(existingSubjects.map(s => normalizeForComparison(s.name)));
+      const missingIds = subjectIds.filter(id => {
+        const normalized = normalizeForComparison(id);
+        return !foundNormalized.has(normalized);
+      });
+      
+      console.error(`Subject validation failed. Looking for: ${subjectIds.join(', ')}, Found: ${foundNames.join(', ')}, Missing: ${missingIds.join(', ')}`);
+      
       return res.status(400).json({
         error: "One or more subject IDs are invalid",
+        details: `Could not find subjects: ${missingIds.join(', ')}`,
       });
     }
 
@@ -526,6 +529,235 @@ router.post("/generate", async (req, res) => {
     console.error("   - Error stack:", error?.stack);
     res.status(500).json({
       error: "Failed to generate subjects",
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * GET /api/subjects/user/archived
+ * Get archived subjects for the current user
+ */
+router.get("/user/archived", async (req, res) => {
+  try {
+    const userId = req.userId;
+
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const { data: archivedSubjects, error } = await supabaseClient
+      .from("user_subjects")
+      .select(`
+        *,
+        subjects (*)
+      `)
+      .eq("user_id", userId)
+      .eq("is_active", false)
+      .not("archived_at", "is", null)
+      .order("archived_at", { ascending: false });
+
+    if (error) throw error;
+
+    const formattedSubjects = archivedSubjects.map((us) => ({
+      id: us.subjects.name.toLowerCase().replace(/\s+/g, '-'),
+      uuid: us.subjects.id,
+      name: us.subjects.name,
+      category: us.subjects.category,
+      description: us.subjects.description,
+      icon: us.subjects.icon,
+      colors: us.subjects.colors || ["#3B82F6", "#1E40AF"],
+      selectedAt: us.selected_at,
+      archivedAt: us.archived_at,
+    }));
+
+    res.json({
+      success: true,
+      subjects: formattedSubjects,
+      count: formattedSubjects.length,
+    });
+  } catch (error) {
+    console.error("Error getting archived subjects:", error);
+    res.status(500).json({
+      error: "Failed to get archived subjects",
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * POST /api/subjects/user/:subjectId/archive
+ * Archive a subject for the current user
+ */
+router.post("/user/:subjectId/archive", async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { subjectId } = req.params;
+
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    if (!subjectId) {
+      return res.status(400).json({ error: "Subject ID is required" });
+    }
+
+    // Find the subject by normalized name
+    const normalizeForComparison = (str) => {
+      return str.toLowerCase().trim().replace(/[\s-]+/g, '-');
+    };
+    
+    const normalizedSubjectId = normalizeForComparison(subjectId);
+    
+    // Get all active subjects to find the match
+    const { data: allSubjects, error: fetchError } = await supabaseClient
+      .from("subjects")
+      .select("id, name")
+      .eq("is_active", true);
+
+    if (fetchError) throw fetchError;
+
+    const matchedSubject = allSubjects.find(subject => {
+      const normalizedSubjectName = normalizeForComparison(subject.name);
+      return normalizedSubjectName === normalizedSubjectId;
+    });
+
+    if (!matchedSubject) {
+      return res.status(404).json({ error: "Subject not found" });
+    }
+
+    // Archive the subject (set is_active to false and archived_at to now)
+    const { data: updatedSubject, error: updateError } = await supabaseClient
+      .from("user_subjects")
+      .update({
+        is_active: false,
+        archived_at: new Date().toISOString(),
+      })
+      .eq("user_id", userId)
+      .eq("subject_id", matchedSubject.id)
+      .select(`
+        *,
+        subjects (*)
+      `)
+      .single();
+
+    if (updateError) {
+      if (updateError.code === 'PGRST116') {
+        return res.status(404).json({ error: "Subject not found in user's subjects" });
+      }
+      throw updateError;
+    }
+
+    const formattedSubject = {
+      id: updatedSubject.subjects.name.toLowerCase().replace(/\s+/g, '-'),
+      uuid: updatedSubject.subjects.id,
+      name: updatedSubject.subjects.name,
+      category: updatedSubject.subjects.category,
+      description: updatedSubject.subjects.description,
+      icon: updatedSubject.subjects.icon,
+      colors: updatedSubject.subjects.colors || ["#3B82F6", "#1E40AF"],
+      selectedAt: updatedSubject.selected_at,
+      archivedAt: updatedSubject.archived_at,
+    };
+
+    res.json({
+      success: true,
+      message: "Subject archived successfully",
+      subject: formattedSubject,
+    });
+  } catch (error) {
+    console.error("Error archiving subject:", error);
+    res.status(500).json({
+      error: "Failed to archive subject",
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * POST /api/subjects/user/:subjectId/unarchive
+ * Unarchive a subject for the current user
+ */
+router.post("/user/:subjectId/unarchive", async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { subjectId } = req.params;
+
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    if (!subjectId) {
+      return res.status(400).json({ error: "Subject ID is required" });
+    }
+
+    // Find the subject by normalized name
+    const normalizeForComparison = (str) => {
+      return str.toLowerCase().trim().replace(/[\s-]+/g, '-');
+    };
+    
+    const normalizedSubjectId = normalizeForComparison(subjectId);
+    
+    // Get all subjects to find the match
+    const { data: allSubjects, error: fetchError } = await supabaseClient
+      .from("subjects")
+      .select("id, name")
+      .eq("is_active", true);
+
+    if (fetchError) throw fetchError;
+
+    const matchedSubject = allSubjects.find(subject => {
+      const normalizedSubjectName = normalizeForComparison(subject.name);
+      return normalizedSubjectName === normalizedSubjectId;
+    });
+
+    if (!matchedSubject) {
+      return res.status(404).json({ error: "Subject not found" });
+    }
+
+    // Unarchive the subject (set is_active to true and clear archived_at)
+    const { data: updatedSubject, error: updateError } = await supabaseClient
+      .from("user_subjects")
+      .update({
+        is_active: true,
+        archived_at: null,
+      })
+      .eq("user_id", userId)
+      .eq("subject_id", matchedSubject.id)
+      .select(`
+        *,
+        subjects (*)
+      `)
+      .single();
+
+    if (updateError) {
+      if (updateError.code === 'PGRST116') {
+        return res.status(404).json({ error: "Subject not found in user's subjects" });
+      }
+      throw updateError;
+    }
+
+    const formattedSubject = {
+      id: updatedSubject.subjects.name.toLowerCase().replace(/\s+/g, '-'),
+      uuid: updatedSubject.subjects.id,
+      name: updatedSubject.subjects.name,
+      category: updatedSubject.subjects.category,
+      description: updatedSubject.subjects.description,
+      icon: updatedSubject.subjects.icon,
+      colors: updatedSubject.subjects.colors || ["#3B82F6", "#1E40AF"],
+      selectedAt: updatedSubject.selected_at,
+      archivedAt: null,
+    };
+
+    res.json({
+      success: true,
+      message: "Subject unarchived successfully",
+      subject: formattedSubject,
+    });
+  } catch (error) {
+    console.error("Error unarchiving subject:", error);
+    res.status(500).json({
+      error: "Failed to unarchive subject",
       message: error.message,
     });
   }
