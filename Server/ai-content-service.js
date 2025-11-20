@@ -1168,7 +1168,7 @@ CRITICAL INSTRUCTIONS:
 3. Generate EXACTLY ${numSubjects} subjects - this is mandatory and critical.
 4. Subject names should be concise (2-4 words max).
 5. Descriptions MUST be brief (1-2 sentences, 20-40 words max) to ensure the complete JSON fits within token limits.
-6. Use appropriate MaterialCommunityIcons icon names (e.g., "code-tags", "web", "chart-line", "shield-lock", "book-open-variant", "calculator-variant", "atom", "scroll").
+6. Use appropriate MaterialCommunityIcons icon names (e.g., "code-tags", "web", "chart-line", "shield-lock", "book-open-variant", "calculator-variant", "atom", "scroll-text").
 7. Use attractive color combinations in hex format (e.g., ["#3B82F6", "#1E40AF"]).
 8. Ensure the JSON is complete and properly closed - do not truncate the response.`;
 

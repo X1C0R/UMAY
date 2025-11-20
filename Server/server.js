@@ -313,6 +313,52 @@ app.get("/profile", authenticateToken, async (req, res) => {
   }
 });
 
+// PUT /profile - Update user profile (accepts JSON with avatar_url as string)
+app.put("/profile", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { first_name, middle_name, last_name, avatar_url } = req.body;
+
+    // Prepare update object
+    const updateObj = { updated_at: new Date().toISOString() };
+    
+    if (first_name !== undefined) updateObj.first_name = first_name;
+    if (middle_name !== undefined) {
+      // Allow null to clear middle name
+      updateObj.middle_name = middle_name === null || middle_name === "" ? null : middle_name;
+    }
+    if (last_name !== undefined) updateObj.last_name = last_name;
+    if (avatar_url !== undefined) {
+      // Allow null to clear avatar
+      updateObj.avatar_url = avatar_url === null || avatar_url === "" ? null : avatar_url;
+    }
+
+    // Update user in Supabase
+    const { data: userData, error: userError } = await supabase
+      .from("users")
+      .update(updateObj)
+      .eq("id", userId)
+      .select()
+      .single();
+
+    if (userError) {
+      console.error("Supabase update error:", userError);
+      return res.status(400).json({ error: userError.message || "Failed to update profile" });
+    }
+
+    // Remove sensitive info
+    delete userData.password;
+
+    res.json({ 
+      message: "Profile updated successfully", 
+      user: userData 
+    });
+  } catch (err) {
+    console.error("Profile update error:", err);
+    res.status(500).json({ error: err.message || "Server error" });
+  }
+});
+
 app.put("/edit",authenticateToken, upload.single("avatar"), async (req, res) => {
     const { first_name, middle_name, last_name } = req.body;
     const userId = req.userId;
